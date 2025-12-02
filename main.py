@@ -57,6 +57,10 @@ async def send_to_yandex_gpt(user_message: str) -> str:
         },
         "messages": [
             {
+                "role": "system",
+                "text": 'не используй в ответе markdown. любой твой ответ должен быть возвращен в соответствии со схемой json: {"user_msg": "<сообщение пользователя>", "response": "<ответ на сообщение пользователя>"}.'
+            },
+            {
                 "role": "user",
                 "text": user_message
             }
