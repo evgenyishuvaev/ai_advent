@@ -2,7 +2,9 @@ import asyncio
 import os
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 import aiohttp
 
 # Загружаем переменные окружения из .env файла
@@ -31,13 +33,27 @@ dp = Dispatcher()
 # URL для Yandex GPT API
 YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
+# Словарь для хранения истории сообщений каждого пользователя
+# Ключ: user_id, Значение: список сообщений в формате {"role": "user"/"assistant", "text": "..."}
+user_histories: dict[int, list[dict[str, str]]] = {}
 
-async def send_to_yandex_gpt(user_message: str) -> str:
+# Словарь для хранения системных промптов каждого пользователя
+# Ключ: user_id, Значение: системный промпт (строка)
+user_system_prompts: dict[int, str] = {}
+
+
+class SystemPromptStates(StatesGroup):
+    """Состояния FSM для запроса системного промпта"""
+    waiting_for_prompt = State()
+
+
+async def send_to_yandex_gpt(messages_history: list[dict[str, str]], system_prompt: str = None) -> str:
     """
-    Отправляет сообщение пользователя в Yandex GPT и возвращает ответ модели
+    Отправляет историю сообщений в Yandex GPT и возвращает ответ модели
     
     Args:
-        user_message: Сообщение пользователя
+        messages_history: Список сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
+        system_prompt: Системный промпт (опционально)
         
     Returns:
         Ответ от Yandex GPT
@@ -48,6 +64,15 @@ async def send_to_yandex_gpt(user_message: str) -> str:
         # "x-folder-id": f"{YANDEX_FOLDER_ID}"
     }
     
+    # Формируем список сообщений с системным промптом в начале, если он есть
+    messages = []
+    if system_prompt:
+        messages.append({
+            "role": "system",
+            "text": system_prompt
+        })
+    messages.extend(messages_history)
+    
     payload = {
         "modelUri": f"gpt://{YANDEX_FOLDER_ID}/{YANDEX_MODEL}",
         "completionOptions": {
@@ -55,16 +80,7 @@ async def send_to_yandex_gpt(user_message: str) -> str:
             "temperature": 0.6,
             "maxTokens": 2000
         },
-        "messages": [
-            {
-                "role": "system",
-                "text": 'не используй в ответе markdown. любой твой ответ должен быть возвращен в соответствии со схемой json: {"user_msg": "<сообщение пользователя>", "response": "<ответ на сообщение пользователя>"}.'
-            },
-            {
-                "role": "user",
-                "text": user_message
-            }
-        ]
+        "messages": messages
     }
     
     try:
@@ -92,13 +108,30 @@ async def send_to_yandex_gpt(user_message: str) -> str:
 
 
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
     """Обработчик команды /start"""
-    await message.answer(
-        f"Привет, {message.from_user.first_name}! 👋\n\n"
-        "Я бот с интеграцией Yandex GPT. Просто отправь мне любое сообщение, "
-        "и я передам его в Yandex GPT, а затем отправлю тебе ответ модели!"
-    )
+    user_id = message.from_user.id
+    # Очищаем историю при старте
+    user_histories[user_id] = []
+    
+    # Проверяем наличие системного промпта
+    if user_id not in user_system_prompts or not user_system_prompts[user_id]:
+        await message.answer(
+            f"Привет, {message.from_user.first_name}! 👋\n\n"
+            "Я бот с интеграцией Yandex GPT.\n\n"
+            "Для начала работы необходимо задать системный промпт. "
+            "Это инструкция для модели, которая определяет её поведение и стиль ответов.\n\n"
+            "Пожалуйста, отправь системный промпт (или используй команду /system для его установки)."
+        )
+        await state.set_state(SystemPromptStates.waiting_for_prompt)
+    else:
+        await message.answer(
+            f"Привет, {message.from_user.first_name}! 👋\n\n"
+            "Я бот с интеграцией Yandex GPT. Просто отправь мне любое сообщение, "
+            "и я передам его в Yandex GPT, а затем отправлю тебе ответ модели!\n\n"
+            "Бот помнит контекст предыдущих сообщений. Используй /clear для очистки истории.\n"
+            "Используй /system для изменения системного промпта."
+        )
 
 
 @dp.message(Command("help"))
@@ -107,10 +140,190 @@ async def cmd_help(message: types.Message):
     await message.answer(
         "Доступные команды:\n"
         "/start - Начать работу с ботом\n"
-        "/help - Показать эту справку\n\n"
+        "/help - Показать эту справку\n"
+        "/clear - Очистить историю сообщений\n"
+        "/system - Установить или просмотреть системный промпт\n"
+        "/history - Показать историю сообщений\n\n"
         "Просто отправь мне любое сообщение, и я передам его в Yandex GPT, "
-        "а затем отправлю тебе ответ модели!"
+        "а затем отправлю тебе ответ модели! Бот помнит контекст предыдущих сообщений."
     )
+
+
+@dp.message(Command("system"))
+async def cmd_system(message: types.Message, state: FSMContext):
+    """Обработчик команды /system - установка системного промпта"""
+    user_id = message.from_user.id
+    
+    # Проверяем, есть ли аргумент в команде
+    command_args = message.text.split(maxsplit=1)
+    if len(command_args) > 1:
+        # Если промпт указан в команде
+        system_prompt = command_args[1]
+        user_system_prompts[user_id] = system_prompt
+        await message.answer(
+            f"Системный промпт установлен! ✅\n\n"
+            f"Текущий промпт: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}"
+        )
+        await state.clear()
+    else:
+        # Если промпта нет, показываем текущий и запрашиваем новый
+        if user_id in user_system_prompts and user_system_prompts[user_id]:
+            current_prompt = user_system_prompts[user_id]
+            await message.answer(
+                f"Текущий системный промпт:\n\n{current_prompt}\n\n"
+                "Отправь новый системный промпт для его замены, или /cancel для отмены."
+            )
+        else:
+            await message.answer(
+                "Системный промпт не установлен.\n\n"
+                "Отправь системный промпт (это инструкция для модели, которая определяет её поведение), "
+                "или /cancel для отмены."
+            )
+        await state.set_state(SystemPromptStates.waiting_for_prompt)
+
+
+@dp.message(Command("clear"))
+async def cmd_clear(message: types.Message):
+    """Обработчик команды /clear - очищает историю сообщений пользователя"""
+    user_id = message.from_user.id
+    if user_id in user_histories:
+        user_histories[user_id] = []
+        await message.answer("История сообщений очищена. ✅")
+    else:
+        await message.answer("История сообщений уже пуста.")
+
+
+def escape_markdown(text: str) -> str:
+    """Экранирует специальные символы Markdown для Telegram (обычный Markdown)"""
+    # Экранируем основные символы, которые могут вызвать проблемы в Markdown
+    # Для обычного Markdown нужно экранировать: *, _, [, ], `
+    escape_chars = ['*', '_', '[', ']', '`']
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+
+@dp.message(Command("history"))
+async def cmd_history(message: types.Message):
+    """Обработчик команды /history - показывает историю сообщений"""
+    user_id = message.from_user.id
+    
+    # Проверяем наличие истории
+    if user_id not in user_histories or not user_histories[user_id]:
+        await message.answer("История сообщений пуста. Начни диалог, отправив сообщение боту.")
+        return
+    
+    history = user_histories[user_id]
+    
+    # Формируем отформатированные сообщения
+    formatted_messages = []
+    
+    for i, msg in enumerate(history):
+        role = msg.get("role", "")
+        text = msg.get("text", "")
+        
+        # Экранируем специальные символы Markdown
+        text_escaped = escape_markdown(text)
+        
+        if i == 0:
+            # Первое сообщение выделяем жирным
+            if role == "user":
+                formatted_messages.append(f"**👤 {text_escaped}**")
+            elif role == "assistant":
+                formatted_messages.append(f"**🤖 {text_escaped}**")
+            else:
+                formatted_messages.append(f"**{text_escaped}**")
+        else:
+            # Остальные сообщения с эмодзи
+            if role == "user":
+                formatted_messages.append(f"👤 {text_escaped}")
+            elif role == "assistant":
+                formatted_messages.append(f"🤖 {text_escaped}")
+            else:
+                formatted_messages.append(text_escaped)
+    
+    # Telegram ограничение на длину сообщения - 4096 символов
+    max_length = 4096
+    
+    # Формируем заголовок
+    header = f"📜 История сообщений ({len(history)} сообщений):\n\n"
+    
+    # Объединяем все сообщения
+    full_history = "\n\n".join(formatted_messages)
+    full_text = header + full_history
+    
+    # Проверяем, помещается ли всё в одно сообщение
+    if len(full_text) <= max_length:
+        # Отправляем одним сообщением
+        await message.answer(full_text, parse_mode="Markdown")
+    else:
+        # Разбиваем на части
+        parts = []
+        current_part = []
+        is_first_part = True
+        
+        for msg_text in formatted_messages:
+            # Формируем текущую часть для проверки длины
+            if is_first_part:
+                # Для первой части учитываем заголовок
+                test_part = header + "\n\n".join(current_part + [msg_text]) if current_part else header + msg_text
+            else:
+                # Для остальных частей заголовка нет
+                test_part = "\n\n".join(current_part + [msg_text]) if current_part else msg_text
+            
+            # Проверяем, поместится ли сообщение в текущую часть
+            if len(test_part) > max_length and current_part:
+                # Сохраняем текущую часть и начинаем новую
+                if is_first_part:
+                    # Первая часть с заголовком
+                    parts.append(header + "\n\n".join(current_part))
+                    is_first_part = False
+                else:
+                    # Остальные части без заголовка
+                    parts.append("\n\n".join(current_part))
+                current_part = [msg_text]
+            else:
+                # Добавляем сообщение в текущую часть
+                current_part.append(msg_text)
+        
+        # Добавляем последнюю часть
+        if current_part:
+            if is_first_part:
+                # Если это единственная часть (не должно случиться, но на всякий случай)
+                parts.append(header + "\n\n".join(current_part))
+            else:
+                # Продолжение истории
+                parts.append("\n\n".join(current_part))
+        
+        # Отправляем все части
+        for part in parts:
+            await message.answer(part, parse_mode="Markdown")
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    """Обработчик команды /cancel - отменяет текущую операцию"""
+    await state.clear()
+    await message.answer("Операция отменена.")
+
+
+@dp.message(StateFilter(SystemPromptStates.waiting_for_prompt))
+async def process_system_prompt(message: types.Message, state: FSMContext):
+    """Обработчик для получения системного промпта от пользователя"""
+    user_id = message.from_user.id
+    
+    if not message.text:
+        await message.answer("Пожалуйста, отправь текстовый системный промпт.")
+        return
+    
+    # Сохраняем системный промпт
+    user_system_prompts[user_id] = message.text
+    await message.answer(
+        f"Системный промпт установлен! ✅\n\n"
+        f"Текущий промпт: {message.text[:100]}{'...' if len(message.text) > 100 else ''}\n\n"
+        "Теперь можешь отправлять сообщения боту."
+    )
+    await state.clear()
 
 
 @dp.message()
@@ -121,11 +334,39 @@ async def handle_message(message: types.Message):
         await message.answer("Пожалуйста, отправьте текстовое сообщение.")
         return
     
+    user_id = message.from_user.id
+    
+    # Проверяем наличие системного промпта
+    if user_id not in user_system_prompts or not user_system_prompts[user_id]:
+        await message.answer(
+            "Системный промпт не установлен. Пожалуйста, используй команду /system для его установки."
+        )
+        return
+    
+    # Получаем или создаем историю для пользователя
+    if user_id not in user_histories:
+        user_histories[user_id] = []
+    
+    # Добавляем сообщение пользователя в историю
+    user_histories[user_id].append({
+        "role": "user",
+        "text": message.text
+    })
+    
     # Показываем индикатор печати
     await bot.send_chat_action(message.chat.id, "typing")
     
-    # Отправляем сообщение в Yandex GPT
-    response = await send_to_yandex_gpt(message.text)
+    # Получаем системный промпт пользователя
+    system_prompt = user_system_prompts.get(user_id)
+    
+    # Отправляем всю историю сообщений в Yandex GPT с системным промптом
+    response = await send_to_yandex_gpt(user_histories[user_id], system_prompt)
+    
+    # Добавляем ответ ассистента в историю
+    user_histories[user_id].append({
+        "role": "assistant",
+        "text": response
+    })
     
     # Отправляем ответ пользователю
     await message.answer(response)
