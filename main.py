@@ -5,7 +5,12 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-import aiohttp
+from services.yandex_gpt_service import YandexGPTService
+from services.user_service import UserService
+from services.message_service import MessageService
+from services.history_formatter_service import HistoryFormatterService
+from services.token_service import TokenService
+from utils import escape_markdown
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
@@ -30,21 +35,16 @@ if not YANDEX_FOLDER_ID:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# URL для Yandex GPT API
-YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-
-# Словарь для хранения истории сообщений каждого пользователя
-# Ключ: user_id, Значение: список сообщений в формате {"role": "user"/"assistant", "text": "..."}
-user_histories: dict[int, list[dict[str, str]]] = {}
-
-# Словарь для хранения системных промптов каждого пользователя
-# Ключ: user_id, Значение: системный промпт (строка)
-user_system_prompts: dict[int, str] = {}
-
-# Словарь для хранения температуры каждого пользователя
-# Ключ: user_id, Значение: температура (float, по умолчанию 0.6)
-user_temperatures: dict[int, float] = {}
-DEFAULT_TEMPERATURE = 0.6
+# Инициализируем сервисы
+yandex_gpt_service = YandexGPTService(
+    api_key=YANDEX_API_KEY,
+    folder_id=YANDEX_FOLDER_ID,
+    model=YANDEX_MODEL
+)
+user_service = UserService()
+token_service = TokenService()
+message_service = MessageService(user_service, yandex_gpt_service, token_service)
+history_formatter = HistoryFormatterService()
 
 
 class SystemPromptStates(StatesGroup):
@@ -52,76 +52,15 @@ class SystemPromptStates(StatesGroup):
     waiting_for_prompt = State()
 
 
-async def send_to_yandex_gpt(messages_history: list[dict[str, str]], system_prompt: str = None, temperature: float = DEFAULT_TEMPERATURE) -> str:
-    """
-    Отправляет историю сообщений в Yandex GPT и возвращает ответ модели
-    
-    Args:
-        messages_history: Список сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
-        system_prompt: Системный промпт (опционально)
-        temperature: Коэффициент температуры для генерации (по умолчанию 0.6)
-        
-    Returns:
-        Ответ от Yandex GPT
-    """
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Api-Key {YANDEX_API_KEY}",
-        # "x-folder-id": f"{YANDEX_FOLDER_ID}"
-    }
-    
-    # Формируем список сообщений с системным промптом в начале, если он есть
-    messages = []
-    if system_prompt:
-        messages.append({
-            "role": "system",
-            "text": system_prompt
-        })
-    messages.extend(messages_history)
-    
-    payload = {
-        "modelUri": f"gpt://{YANDEX_FOLDER_ID}/{YANDEX_MODEL}",
-        "completionOptions": {
-            "stream": False,
-            "temperature": temperature,
-            "maxTokens": 2000
-        },
-        "messages": messages
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                YANDEX_GPT_URL,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # Извлекаем текст ответа из структуры ответа Yandex GPT
-                    if "result" in data and "alternatives" in data["result"]:
-                        if len(data["result"]["alternatives"]) > 0:
-                            return data["result"]["alternatives"][0]["message"]["text"]
-                    return "Не удалось получить ответ от модели."
-                else:
-                    error_text = await response.text()
-                    return f"Ошибка API Yandex GPT (код {response.status}): {error_text}"
-    except asyncio.TimeoutError:
-        return "Превышено время ожидания ответа от Yandex GPT. Попробуйте позже."
-    except Exception as e:
-        return f"Произошла ошибка при обращении к Yandex GPT: {str(e)}"
-
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     """Обработчик команды /start"""
     user_id = message.from_user.id
     # Очищаем историю при старте
-    user_histories[user_id] = []
+    user_service.clear_history(user_id)
     
     # Проверяем наличие системного промпта
-    if user_id not in user_system_prompts or not user_system_prompts[user_id]:
+    if not user_service.has_system_prompt(user_id):
         await message.answer(
             f"Привет, {message.from_user.first_name}! 👋\n\n"
             "Я бот с интеграцией Yandex GPT.\n\n"
@@ -167,19 +106,25 @@ async def cmd_system(message: types.Message, state: FSMContext):
     if len(command_args) > 1:
         # Если промпт указан в команде
         system_prompt = command_args[1]
-        user_system_prompts[user_id] = system_prompt
+        user_service.set_system_prompt(user_id, system_prompt)
+        # Экранируем промпт для безопасного отображения
+        system_prompt_escaped = escape_markdown(system_prompt[:100] + ('...' if len(system_prompt) > 100 else ''))
         await message.answer(
             f"Системный промпт установлен! ✅\n\n"
-            f"Текущий промпт: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}"
+            f"Текущий промпт: {system_prompt_escaped}",
+            parse_mode="Markdown"
         )
         await state.clear()
     else:
         # Если промпта нет, показываем текущий и запрашиваем новый
-        if user_id in user_system_prompts and user_system_prompts[user_id]:
-            current_prompt = user_system_prompts[user_id]
+        current_prompt = user_service.get_system_prompt(user_id)
+        if current_prompt:
+            # Экранируем промпт для безопасного отображения
+            current_prompt_escaped = escape_markdown(current_prompt)
             await message.answer(
-                f"Текущий системный промпт:\n\n{current_prompt}\n\n"
-                "Отправь новый системный промпт для его замены, или /cancel для отмены."
+                f"Текущий системный промпт:\n\n{current_prompt_escaped}\n\n"
+                "Отправь новый системный промпт для его замены, или /cancel для отмены.",
+                parse_mode="Markdown"
             )
         else:
             await message.answer(
@@ -202,10 +147,11 @@ async def cmd_temperature(message: types.Message):
             # Пытаемся преобразовать аргумент в float
             temp_value = float(command_args[1])
             
-            # Проверяем диапазон температуры (обычно 0.0 - 2.0)
-            if temp_value < 0.0 or temp_value > 2.0:
+            # Валидируем температуру
+            is_valid, error_message = user_service.validate_temperature(temp_value)
+            if not is_valid:
                 await message.answer(
-                    "❌ Температура должна быть в диапазоне от 0.0 до 2.0.\n\n"
+                    f"❌ {error_message}\n\n"
                     "Рекомендации:\n"
                     "• 0.0-0.3 - более детерминированные, точные ответы\n"
                     "• 0.4-0.7 - сбалансированные ответы (по умолчанию 0.6)\n"
@@ -215,7 +161,7 @@ async def cmd_temperature(message: types.Message):
                 return
             
             # Сохраняем температуру
-            user_temperatures[user_id] = temp_value
+            user_service.set_temperature(user_id, temp_value)
             await message.answer(
                 f"✅ Температура установлена: {temp_value}\n\n"
                 f"Следующие ответы будут генерироваться с этим коэффициентом температуры."
@@ -228,7 +174,7 @@ async def cmd_temperature(message: types.Message):
             )
     else:
         # Если температуры нет, показываем текущую
-        current_temp = user_temperatures.get(user_id, DEFAULT_TEMPERATURE)
+        current_temp = user_service.get_temperature(user_id)
         await message.answer(
             f"🌡 Текущая температура: {current_temp}\n\n"
             "Используй команду так:\n"
@@ -246,21 +192,10 @@ async def cmd_temperature(message: types.Message):
 async def cmd_clear(message: types.Message):
     """Обработчик команды /clear - очищает историю сообщений пользователя"""
     user_id = message.from_user.id
-    if user_id in user_histories:
-        user_histories[user_id] = []
+    if user_service.clear_history(user_id):
         await message.answer("История сообщений очищена. ✅")
     else:
         await message.answer("История сообщений уже пуста.")
-
-
-def escape_markdown(text: str) -> str:
-    """Экранирует специальные символы Markdown для Telegram (обычный Markdown)"""
-    # Экранируем основные символы, которые могут вызвать проблемы в Markdown
-    # Для обычного Markdown нужно экранировать: *, _, [, ], `
-    escape_chars = ['*', '_', '[', ']', '`']
-    for char in escape_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
 
 
 @dp.message(Command("history"))
@@ -268,96 +203,20 @@ async def cmd_history(message: types.Message):
     """Обработчик команды /history - показывает историю сообщений"""
     user_id = message.from_user.id
     
+    # Получаем историю
+    history = user_service.get_history(user_id)
+    
     # Проверяем наличие истории
-    if user_id not in user_histories or not user_histories[user_id]:
+    if not history:
         await message.answer("История сообщений пуста. Начни диалог, отправив сообщение боту.")
         return
     
-    history = user_histories[user_id]
+    # Форматируем и разбиваем историю на части
+    parts = history_formatter.format_and_split_history(history)
     
-    # Формируем отформатированные сообщения
-    formatted_messages = []
-    
-    for i, msg in enumerate(history):
-        role = msg.get("role", "")
-        text = msg.get("text", "")
-        
-        # Экранируем специальные символы Markdown
-        text_escaped = escape_markdown(text)
-        
-        if i == 0:
-            # Первое сообщение выделяем жирным
-            if role == "user":
-                formatted_messages.append(f"**👤 {text_escaped}**")
-            elif role == "assistant":
-                formatted_messages.append(f"**🤖 {text_escaped}**")
-            else:
-                formatted_messages.append(f"**{text_escaped}**")
-        else:
-            # Остальные сообщения с эмодзи
-            if role == "user":
-                formatted_messages.append(f"👤 {text_escaped}")
-            elif role == "assistant":
-                formatted_messages.append(f"🤖 {text_escaped}")
-            else:
-                formatted_messages.append(text_escaped)
-    
-    # Telegram ограничение на длину сообщения - 4096 символов
-    max_length = 4096
-    
-    # Формируем заголовок
-    header = f"📜 История сообщений ({len(history)} сообщений):\n\n"
-    
-    # Объединяем все сообщения
-    full_history = "\n\n".join(formatted_messages)
-    full_text = header + full_history
-    
-    # Проверяем, помещается ли всё в одно сообщение
-    if len(full_text) <= max_length:
-        # Отправляем одним сообщением
-        await message.answer(full_text, parse_mode="Markdown")
-    else:
-        # Разбиваем на части
-        parts = []
-        current_part = []
-        is_first_part = True
-        
-        for msg_text in formatted_messages:
-            # Формируем текущую часть для проверки длины
-            if is_first_part:
-                # Для первой части учитываем заголовок
-                test_part = header + "\n\n".join(current_part + [msg_text]) if current_part else header + msg_text
-            else:
-                # Для остальных частей заголовка нет
-                test_part = "\n\n".join(current_part + [msg_text]) if current_part else msg_text
-            
-            # Проверяем, поместится ли сообщение в текущую часть
-            if len(test_part) > max_length and current_part:
-                # Сохраняем текущую часть и начинаем новую
-                if is_first_part:
-                    # Первая часть с заголовком
-                    parts.append(header + "\n\n".join(current_part))
-                    is_first_part = False
-                else:
-                    # Остальные части без заголовка
-                    parts.append("\n\n".join(current_part))
-                current_part = [msg_text]
-            else:
-                # Добавляем сообщение в текущую часть
-                current_part.append(msg_text)
-        
-        # Добавляем последнюю часть
-        if current_part:
-            if is_first_part:
-                # Если это единственная часть (не должно случиться, но на всякий случай)
-                parts.append(header + "\n\n".join(current_part))
-            else:
-                # Продолжение истории
-                parts.append("\n\n".join(current_part))
-        
-        # Отправляем все части
-        for part in parts:
-            await message.answer(part, parse_mode="Markdown")
+    # Отправляем все части
+    for part in parts:
+        await message.answer(part, parse_mode="Markdown")
 
 
 @dp.message(Command("cancel"))
@@ -377,11 +236,15 @@ async def process_system_prompt(message: types.Message, state: FSMContext):
         return
     
     # Сохраняем системный промпт
-    user_system_prompts[user_id] = message.text
+    user_service.set_system_prompt(user_id, message.text)
+    # Экранируем промпт для безопасного отображения
+    prompt_preview = message.text[:100] + ('...' if len(message.text) > 100 else '')
+    prompt_preview_escaped = escape_markdown(prompt_preview)
     await message.answer(
         f"Системный промпт установлен! ✅\n\n"
-        f"Текущий промпт: {message.text[:100]}{'...' if len(message.text) > 100 else ''}\n\n"
-        "Теперь можешь отправлять сообщения боту."
+        f"Текущий промпт: {prompt_preview_escaped}\n\n"
+        "Теперь можешь отправлять сообщения боту.",
+        parse_mode="Markdown"
     )
     await state.clear()
 
@@ -396,43 +259,30 @@ async def handle_message(message: types.Message):
     
     user_id = message.from_user.id
     
-    # Проверяем наличие системного промпта
-    if user_id not in user_system_prompts or not user_system_prompts[user_id]:
-        await message.answer(
-            "Системный промпт не установлен. Пожалуйста, используй команду /system для его установки."
-        )
-        return
-    
-    # Получаем или создаем историю для пользователя
-    if user_id not in user_histories:
-        user_histories[user_id] = []
-    
-    # Добавляем сообщение пользователя в историю
-    user_histories[user_id].append({
-        "role": "user",
-        "text": message.text
-    })
-    
     # Показываем индикатор печати
     await bot.send_chat_action(message.chat.id, "typing")
     
-    # Получаем системный промпт пользователя
-    system_prompt = user_system_prompts.get(user_id)
+    # Подготавливаем сообщение: подсчитываем токены и добавляем в историю
+    success, prompt_tokens, error_message = message_service.prepare_user_message(user_id, message.text)
     
-    # Получаем температуру пользователя (по умолчанию DEFAULT_TEMPERATURE)
-    temperature = user_temperatures.get(user_id, DEFAULT_TEMPERATURE)
+    if not success:
+        await message.answer(error_message)
+        return
     
-    # Отправляем всю историю сообщений в Yandex GPT с системным промптом и температурой
-    response = await send_to_yandex_gpt(user_histories[user_id], system_prompt, temperature)
+    # Отправляем информацию о количестве токенов в промпте сразу (параллельно с ожиданием ответа)
+    await message.answer(f"Промпт состоит из: {prompt_tokens} токенов")
     
-    # Добавляем ответ ассистента в историю
-    user_histories[user_id].append({
-        "role": "assistant",
-        "text": response
-    })
+    # Получаем данные для запроса к LLM
+    history, system_prompt, temperature = message_service.get_llm_request_data(user_id)
     
-    # Отправляем ответ пользователю
-    await message.answer(response)
+    # Отправляем запрос в YandexGPT
+    response = await yandex_gpt_service.send_message(history, system_prompt, temperature)
+    
+    # Обрабатываем ответ: подсчитываем токены и добавляем в историю
+    success, response_with_tokens, response_tokens = await message_service.process_llm_response(user_id, response)
+    
+    # Отправляем ответ пользователю с информацией о токенах
+    await message.answer(response_with_tokens, parse_mode="Markdown")
 
 
 async def main():
