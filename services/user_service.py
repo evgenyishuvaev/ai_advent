@@ -7,6 +7,7 @@ class UserService:
     """Сервис для управления данными пользователей: история, системные промпты, температура."""
     
     DEFAULT_TEMPERATURE = 0.6
+    DEFAULT_MAX_TOKENS = 2000
     
     def __init__(self):
         """Инициализация сервиса."""
@@ -14,6 +15,7 @@ class UserService:
         self._histories: dict[int, list[dict[str, str]]] = {}
         self._system_prompts: dict[int, str] = {}
         self._temperatures: dict[int, float] = {}
+        self._max_tokens: dict[int, int] = {}
     
     def clear_history(self, user_id: int) -> bool:
         """
@@ -44,7 +46,7 @@ class UserService:
             self._histories[user_id] = []
         return self._histories[user_id]
     
-    def add_message(self, user_id: int, role: str, text: str, tokens: Optional[int] = None) -> None:
+    def add_message(self, user_id: int, role: str, text: str, tokens: Optional[int] = None, response_time: Optional[float] = None) -> None:
         """
         Добавляет сообщение в историю пользователя.
         
@@ -53,6 +55,7 @@ class UserService:
             role: Роль сообщения ("user" или "assistant")
             text: Текст сообщения
             tokens: Количество токенов в сообщении (опционально)
+            response_time: Время ответа LLM в секундах (опционально, только для assistant)
         """
         if user_id not in self._histories:
             self._histories[user_id] = []
@@ -62,6 +65,8 @@ class UserService:
         }
         if tokens is not None:
             message["tokens"] = tokens
+        if response_time is not None:
+            message["response_time"] = response_time
         self._histories[user_id].append(message)
     
     def set_system_prompt(self, user_id: int, prompt: str) -> None:
@@ -132,5 +137,43 @@ class UserService:
         """
         if temperature < 0.0 or temperature > 2.0:
             return False, "Температура должна быть в диапазоне от 0.0 до 2.0."
+        return True, None
+    
+    def set_max_tokens(self, user_id: int, max_tokens: int) -> None:
+        """
+        Устанавливает максимальное количество токенов для пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            max_tokens: Максимальное количество токенов
+        """
+        self._max_tokens[user_id] = max_tokens
+    
+    def get_max_tokens(self, user_id: int) -> int:
+        """
+        Получает максимальное количество токенов пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            
+        Returns:
+            Максимальное количество токенов (по умолчанию DEFAULT_MAX_TOKENS)
+        """
+        return self._max_tokens.get(user_id, self.DEFAULT_MAX_TOKENS)
+    
+    def validate_max_tokens(self, max_tokens: int) -> tuple[bool, Optional[str]]:
+        """
+        Валидирует значение максимального количества токенов.
+        
+        Args:
+            max_tokens: Значение максимального количества токенов для проверки
+            
+        Returns:
+            Кортеж (is_valid, error_message), где error_message = None если валидно
+        """
+        if max_tokens < 1:
+            return False, "Максимальное количество токенов должно быть положительным числом (минимум 1)."
+        if max_tokens > 8000:
+            return False, "Максимальное количество токенов не должно превышать 8000."
         return True, None
 

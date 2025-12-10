@@ -2,7 +2,7 @@
 
 import asyncio
 import aiohttp
-from typing import Optional
+from typing import Optional, Tuple
 
 
 class YandexGPTService:
@@ -36,18 +36,23 @@ class YandexGPTService:
         self,
         messages_history: list[dict[str, str]],
         system_prompt: Optional[str] = None,
-        temperature: float = 0.6
-    ) -> str:
+        temperature: float = 0.6,
+        max_tokens: int = 2000
+    ) -> Tuple[str, dict]:
         """
-        Отправляет историю сообщений в Yandex GPT и возвращает ответ модели.
+        Отправляет историю сообщений в Yandex GPT и возвращает ответ модели и информацию о токенах.
         
         Args:
             messages_history: Список сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
             system_prompt: Системный промпт (опционально)
             temperature: Коэффициент температуры для генерации (по умолчанию 0.6)
+            max_tokens: Максимальное количество токенов в ответе (по умолчанию 2000)
             
         Returns:
-            Ответ от Yandex GPT
+            Кортеж (text, usage), где:
+            - text: Ответ от Yandex GPT
+            - usage: Словарь с информацией о токенах {"inputTextTokens": int, "completionTokens": int, "totalTokens": int}
+                    или пустой словарь, если информация недоступна
         """
         headers = {
             "Content-Type": "application/json",
@@ -68,7 +73,7 @@ class YandexGPTService:
             "completionOptions": {
                 "stream": False,
                 "temperature": temperature,
-                "maxTokens": 2000
+                "maxTokens": max_tokens
             },
             "messages": messages
         }
@@ -83,16 +88,32 @@ class YandexGPTService:
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
+                        print(data)
                         # Извлекаем текст ответа из структуры ответа Yandex GPT
-                        if "result" in data and "alternatives" in data["result"]:
-                            if len(data["result"]["alternatives"]) > 0:
-                                return data["result"]["alternatives"][0]["message"]["text"]
-                        return "Не удалось получить ответ от модели."
+                        text = "Не удалось получить ответ от модели."
+                        usage = {}
+                        
+                        if "result" in data:
+                            # Извлекаем текст ответа
+                            if "alternatives" in data["result"] and len(data["result"]["alternatives"]) > 0:
+                                text = data["result"]["alternatives"][0]["message"]["text"]
+                            
+                            # Извлекаем информацию о токенах
+                            if "usage" in data["result"]:
+                                usage_data = data["result"]["usage"]
+                                # Преобразуем значения в int, так как они могут приходить как строки
+                                usage = {
+                                    "inputTextTokens": int(usage_data.get("inputTextTokens", 0) or 0),
+                                    "completionTokens": int(usage_data.get("completionTokens", 0) or 0),
+                                    "totalTokens": int(usage_data.get("totalTokens", 0) or 0)
+                                }
+                        
+                        return text, usage
                     else:
                         error_text = await response.text()
-                        return f"Ошибка API Yandex GPT (код {response.status}): {error_text}"
+                        return f"Ошибка API Yandex GPT (код {response.status}): {error_text}", {}
         except asyncio.TimeoutError:
-            return "Превышено время ожидания ответа от Yandex GPT. Попробуйте позже."
+            return "Превышено время ожидания ответа от Yandex GPT. Попробуйте позже.", {}
         except Exception as e:
-            return f"Произошла ошибка при обращении к Yandex GPT: {str(e)}"
+            return f"Произошла ошибка при обращении к Yandex GPT: {str(e)}", {}
 

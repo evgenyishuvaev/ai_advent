@@ -25,12 +25,21 @@ class HistoryFormatterService:
             role = msg.get("role", "")
             text = msg.get("text", "")
             tokens = msg.get("tokens")
+            response_time = msg.get("response_time")
             
             # Экранируем специальные символы Markdown
             text_escaped = escape_markdown(text)
             
-            # Формируем строку с токенами, если они есть
-            tokens_str = f" _({tokens} токенов)_" if tokens is not None else ""
+            # Формируем строку с токенами и временем
+            if tokens is not None:
+                if response_time is not None and role == "assistant":
+                    # Для сообщений ассистента показываем токены и время
+                    tokens_str = f" _({tokens} токенов, {response_time:.2f}с)_"
+                else:
+                    # Для пользовательских сообщений только токены
+                    tokens_str = f" _({tokens} токенов)_"
+            else:
+                tokens_str = ""
             
             if i == 0:
                 # Первое сообщение выделяем жирным
