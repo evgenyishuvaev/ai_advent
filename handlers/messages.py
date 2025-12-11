@@ -52,7 +52,7 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
             return
         
         # Получаем данные для запроса к LLM
-        history, system_prompt, temperature, max_tokens = message_service.get_llm_request_data(user_id)
+        history, system_prompt, temperature, max_tokens = await message_service.get_llm_request_data(user_id)
         
         # Измеряем время выполнения запроса к LLM
         start_time = time.time()

@@ -176,4 +176,14 @@ class UserService:
         if max_tokens > 8000:
             return False, "Максимальное количество токенов не должно превышать 8000."
         return True, None
+    
+    def replace_history(self, user_id: int, new_history: list[dict[str, str]]) -> None:
+        """
+        Заменяет историю сообщений пользователя на новую.
+        
+        Args:
+            user_id: ID пользователя
+            new_history: Новая история сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
+        """
+        self._histories[user_id] = new_history
 

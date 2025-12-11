@@ -6,6 +6,7 @@ from services.yandex_gpt_service import YandexGPTService
 from services.user_service import UserService
 from services.message_service import MessageService
 from services.history_formatter_service import HistoryFormatterService
+from services.token_service import TokenService
 from handlers import setup_handlers
 
 # Загружаем переменные окружения из .env файла
@@ -38,7 +39,8 @@ yandex_gpt_service = YandexGPTService(
     model=YANDEX_MODEL
 )
 user_service = UserService()
-message_service = MessageService(user_service, yandex_gpt_service)
+token_service = TokenService()
+message_service = MessageService(user_service, yandex_gpt_service, token_service)
 history_formatter = HistoryFormatterService()
 
 # Регистрируем все хендлеры
