@@ -29,7 +29,7 @@ class MessageService:
         self.yandex_gpt_service = yandex_gpt_service
         self.token_service = token_service
     
-    def prepare_user_message(self, user_id: int, text: str) -> tuple[bool, Optional[str]]:
+    async def prepare_user_message(self, user_id: int, text: str) -> tuple[bool, Optional[str]]:
         """
         Подготавливает сообщение пользователя: проверяет системный промпт, добавляет в историю.
         Вызывается ПЕРЕД отправкой запроса в LLM.
@@ -44,11 +44,11 @@ class MessageService:
             - error_message - сообщение об ошибке (None если успешно)
         """
         # Проверяем наличие системного промпта
-        if not self.user_service.has_system_prompt(user_id):
+        if not await self.user_service.has_system_prompt(user_id):
             return False, "Системный промпт не установлен. Пожалуйста, используй команду /system для его установки."
         
         # Добавляем сообщение пользователя в историю (токены будут получены из API ответа)
-        self.user_service.add_message(user_id, "user", text)
+        await self.user_service.add_message(user_id, "user", text)
         
         return True, None
     
@@ -112,10 +112,10 @@ class MessageService:
         Returns:
             Кортеж (history, system_prompt, temperature, max_tokens)
         """
-        history = self.user_service.get_history(user_id)
-        system_prompt = self.user_service.get_system_prompt(user_id)
-        temperature = self.user_service.get_temperature(user_id)
-        max_tokens = self.user_service.get_max_tokens(user_id)
+        history = await self.user_service.get_history(user_id)
+        system_prompt = await self.user_service.get_system_prompt(user_id)
+        temperature = await self.user_service.get_temperature(user_id)
+        max_tokens = await self.user_service.get_max_tokens(user_id)
         
         # Проверяем количество токенов в контексте
         context_tokens = self._count_context_tokens(history, system_prompt)
@@ -145,7 +145,7 @@ class MessageService:
                         new_history.extend(recent_messages)
                         
                         # Заменяем историю в UserService
-                        self.user_service.replace_history(user_id, new_history)
+                        await self.user_service.replace_history(user_id, new_history)
                         
                         # Обновляем history для возврата
                         history = new_history
@@ -183,7 +183,7 @@ class MessageService:
         response_tokens = int(response_tokens) if response_tokens else 0
         
         # Добавляем ответ ассистента в историю с количеством токенов и временем ответа
-        self.user_service.add_message(user_id, "assistant", response, tokens=response_tokens, response_time=response_time)
+        await self.user_service.add_message(user_id, "assistant", response, tokens=response_tokens, response_time=response_time)
         
         # Экранируем специальные символы Markdown в ответе перед добавлением разметки
         response_escaped = escape_markdown(response)
@@ -206,22 +206,22 @@ class MessageService:
             Кортеж (success, message, prompt_tokens, response_tokens)
         """
         # Проверяем наличие системного промпта
-        if not self.user_service.has_system_prompt(user_id):
+        if not await self.user_service.has_system_prompt(user_id):
             return False, "Системный промпт не установлен. Пожалуйста, используй команду /system для его установки.", 0, 0
         
         # Добавляем сообщение пользователя в историю (токены будут получены из API ответа)
-        self.user_service.add_message(user_id, "user", text)
+        await self.user_service.add_message(user_id, "user", text)
         
         # Получаем информацию о токенах из API (будет использовано inputTextTokens из ответа)
         prompt_tokens = 0  # Будет обновлено после получения ответа от API
         
         # Получаем системный промпт, температуру и максимальное количество токенов
-        system_prompt = self.user_service.get_system_prompt(user_id)
-        temperature = self.user_service.get_temperature(user_id)
-        max_tokens = self.user_service.get_max_tokens(user_id)
+        system_prompt = await self.user_service.get_system_prompt(user_id)
+        temperature = await self.user_service.get_temperature(user_id)
+        max_tokens = await self.user_service.get_max_tokens(user_id)
         
         # Получаем историю сообщений
-        history = self.user_service.get_history(user_id)
+        history = await self.user_service.get_history(user_id)
         
         # Отправляем в YandexGPT (история уже содержит новое сообщение пользователя)
         response, usage = await self.yandex_gpt_service.send_message(history, system_prompt, temperature, max_tokens)
@@ -232,7 +232,7 @@ class MessageService:
         response_tokens = int(response_tokens) if response_tokens else 0
         
         # Добавляем ответ ассистента в историю с количеством токенов
-        self.user_service.add_message(user_id, "assistant", response, tokens=response_tokens)
+        await self.user_service.add_message(user_id, "assistant", response, tokens=response_tokens)
         
         return True, response, prompt_tokens, response_tokens
 

@@ -19,7 +19,7 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
             return
         
         # Сохраняем системный промпт
-        user_service.set_system_prompt(user_id, message.text)
+        await user_service.set_system_prompt(user_id, message.text)
         # Экранируем промпт для безопасного отображения
         prompt_preview = message.text[:100] + ('...' if len(message.text) > 100 else '')
         prompt_preview_escaped = escape_markdown(prompt_preview)
@@ -45,7 +45,7 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
         await bot.send_chat_action(message.chat.id, "typing")
         
         # Подготавливаем сообщение: добавляем в историю
-        success, error_message = message_service.prepare_user_message(user_id, message.text)
+        success, error_message = await message_service.prepare_user_message(user_id, message.text)
         
         if not success:
             await message.answer(error_message)

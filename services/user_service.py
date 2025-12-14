@@ -1,6 +1,8 @@
 """Сервис для управления данными пользователей."""
 
 from typing import Optional
+from repositories.user_repository import UserRepository
+from repositories.message_repository import MessageRepository
 
 
 class UserService:
@@ -9,15 +11,18 @@ class UserService:
     DEFAULT_TEMPERATURE = 0.6
     DEFAULT_MAX_TOKENS = 2000
     
-    def __init__(self):
-        """Инициализация сервиса."""
-        # Приватные словари для хранения данных пользователей
-        self._histories: dict[int, list[dict[str, str]]] = {}
-        self._system_prompts: dict[int, str] = {}
-        self._temperatures: dict[int, float] = {}
-        self._max_tokens: dict[int, int] = {}
+    def __init__(self, user_repository: UserRepository, message_repository: MessageRepository):
+        """
+        Инициализация сервиса.
+        
+        Args:
+            user_repository: Репозиторий для работы с конфигом пользователей
+            message_repository: Репозиторий для работы с историей сообщений
+        """
+        self.user_repo = user_repository
+        self.message_repo = message_repository
     
-    def clear_history(self, user_id: int) -> bool:
+    async def clear_history(self, user_id: int) -> bool:
         """
         Очищает историю сообщений пользователя.
         
@@ -27,12 +32,9 @@ class UserService:
         Returns:
             True если история была очищена, False если её не было
         """
-        if user_id in self._histories:
-            self._histories[user_id] = []
-            return True
-        return False
+        return await self.message_repo.clear_history(user_id)
     
-    def get_history(self, user_id: int) -> list[dict[str, str]]:
+    async def get_history(self, user_id: int) -> list[dict[str, str]]:
         """
         Получает историю сообщений пользователя.
         
@@ -42,11 +44,9 @@ class UserService:
         Returns:
             Список сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
         """
-        if user_id not in self._histories:
-            self._histories[user_id] = []
-        return self._histories[user_id]
+        return await self.message_repo.get_history(user_id)
     
-    def add_message(self, user_id: int, role: str, text: str, tokens: Optional[int] = None, response_time: Optional[float] = None) -> None:
+    async def add_message(self, user_id: int, role: str, text: str, tokens: Optional[int] = None, response_time: Optional[float] = None) -> None:
         """
         Добавляет сообщение в историю пользователя.
         
@@ -57,19 +57,9 @@ class UserService:
             tokens: Количество токенов в сообщении (опционально)
             response_time: Время ответа LLM в секундах (опционально, только для assistant)
         """
-        if user_id not in self._histories:
-            self._histories[user_id] = []
-        message = {
-            "role": role,
-            "text": text
-        }
-        if tokens is not None:
-            message["tokens"] = tokens
-        if response_time is not None:
-            message["response_time"] = response_time
-        self._histories[user_id].append(message)
+        await self.message_repo.add_message(user_id, role, text, tokens, response_time)
     
-    def set_system_prompt(self, user_id: int, prompt: str) -> None:
+    async def set_system_prompt(self, user_id: int, prompt: str) -> None:
         """
         Устанавливает системный промпт для пользователя.
         
@@ -77,9 +67,9 @@ class UserService:
             user_id: ID пользователя
             prompt: Системный промпт
         """
-        self._system_prompts[user_id] = prompt
+        await self.user_repo.set_system_prompt(user_id, prompt)
     
-    def get_system_prompt(self, user_id: int) -> Optional[str]:
+    async def get_system_prompt(self, user_id: int) -> Optional[str]:
         """
         Получает системный промпт пользователя.
         
@@ -89,9 +79,9 @@ class UserService:
         Returns:
             Системный промпт или None, если не установлен
         """
-        return self._system_prompts.get(user_id)
+        return await self.user_repo.get_system_prompt(user_id)
     
-    def has_system_prompt(self, user_id: int) -> bool:
+    async def has_system_prompt(self, user_id: int) -> bool:
         """
         Проверяет, установлен ли системный промпт для пользователя.
         
@@ -101,9 +91,9 @@ class UserService:
         Returns:
             True если промпт установлен, False иначе
         """
-        return user_id in self._system_prompts and bool(self._system_prompts[user_id])
+        return await self.user_repo.has_system_prompt(user_id)
     
-    def set_temperature(self, user_id: int, temperature: float) -> None:
+    async def set_temperature(self, user_id: int, temperature: float) -> None:
         """
         Устанавливает температуру для пользователя.
         
@@ -111,9 +101,9 @@ class UserService:
             user_id: ID пользователя
             temperature: Значение температуры
         """
-        self._temperatures[user_id] = temperature
+        await self.user_repo.set_temperature(user_id, temperature)
     
-    def get_temperature(self, user_id: int) -> float:
+    async def get_temperature(self, user_id: int) -> float:
         """
         Получает температуру пользователя.
         
@@ -123,7 +113,7 @@ class UserService:
         Returns:
             Температура (по умолчанию DEFAULT_TEMPERATURE)
         """
-        return self._temperatures.get(user_id, self.DEFAULT_TEMPERATURE)
+        return await self.user_repo.get_temperature(user_id)
     
     def validate_temperature(self, temperature: float) -> tuple[bool, Optional[str]]:
         """
@@ -139,7 +129,7 @@ class UserService:
             return False, "Температура должна быть в диапазоне от 0.0 до 2.0."
         return True, None
     
-    def set_max_tokens(self, user_id: int, max_tokens: int) -> None:
+    async def set_max_tokens(self, user_id: int, max_tokens: int) -> None:
         """
         Устанавливает максимальное количество токенов для пользователя.
         
@@ -147,9 +137,9 @@ class UserService:
             user_id: ID пользователя
             max_tokens: Максимальное количество токенов
         """
-        self._max_tokens[user_id] = max_tokens
+        await self.user_repo.set_max_tokens(user_id, max_tokens)
     
-    def get_max_tokens(self, user_id: int) -> int:
+    async def get_max_tokens(self, user_id: int) -> int:
         """
         Получает максимальное количество токенов пользователя.
         
@@ -159,7 +149,7 @@ class UserService:
         Returns:
             Максимальное количество токенов (по умолчанию DEFAULT_MAX_TOKENS)
         """
-        return self._max_tokens.get(user_id, self.DEFAULT_MAX_TOKENS)
+        return await self.user_repo.get_max_tokens(user_id)
     
     def validate_max_tokens(self, max_tokens: int) -> tuple[bool, Optional[str]]:
         """
@@ -177,7 +167,7 @@ class UserService:
             return False, "Максимальное количество токенов не должно превышать 8000."
         return True, None
     
-    def replace_history(self, user_id: int, new_history: list[dict[str, str]]) -> None:
+    async def replace_history(self, user_id: int, new_history: list[dict[str, str]]) -> None:
         """
         Заменяет историю сообщений пользователя на новую.
         
@@ -185,5 +175,4 @@ class UserService:
             user_id: ID пользователя
             new_history: Новая история сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
         """
-        self._histories[user_id] = new_history
-
+        await self.message_repo.replace_history(user_id, new_history)

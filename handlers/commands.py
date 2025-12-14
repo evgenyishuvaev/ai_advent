@@ -13,10 +13,10 @@ def register_command_handlers(dp, user_service, history_formatter):
         """Обработчик команды /start"""
         user_id = message.from_user.id
         # Очищаем историю при старте
-        user_service.clear_history(user_id)
+        await user_service.clear_history(user_id)
         
         # Проверяем наличие системного промпта
-        if not user_service.has_system_prompt(user_id):
+        if not await user_service.has_system_prompt(user_id):
             await message.answer(
                 f"Привет, {message.from_user.first_name}! 👋\n\n"
                 "Я бот с интеграцией Yandex GPT.\n\n"
@@ -62,7 +62,7 @@ def register_command_handlers(dp, user_service, history_formatter):
         if len(command_args) > 1:
             # Если промпт указан в команде
             system_prompt = command_args[1]
-            user_service.set_system_prompt(user_id, system_prompt)
+            await user_service.set_system_prompt(user_id, system_prompt)
             # Экранируем промпт для безопасного отображения
             system_prompt_escaped = escape_markdown(system_prompt[:100] + ('...' if len(system_prompt) > 100 else ''))
             await message.answer(
@@ -73,7 +73,7 @@ def register_command_handlers(dp, user_service, history_formatter):
             await state.clear()
         else:
             # Если промпта нет, показываем текущий и запрашиваем новый
-            current_prompt = user_service.get_system_prompt(user_id)
+            current_prompt = await user_service.get_system_prompt(user_id)
             if current_prompt:
                 # Экранируем промпт для безопасного отображения
                 current_prompt_escaped = escape_markdown(current_prompt)
@@ -116,7 +116,7 @@ def register_command_handlers(dp, user_service, history_formatter):
                     return
                 
                 # Сохраняем температуру
-                user_service.set_temperature(user_id, temp_value)
+                await user_service.set_temperature(user_id, temp_value)
                 await message.answer(
                     f"✅ Температура установлена: {temp_value}\n\n"
                     f"Следующие ответы будут генерироваться с этим коэффициентом температуры."
@@ -129,7 +129,7 @@ def register_command_handlers(dp, user_service, history_formatter):
                 )
         else:
             # Если температуры нет, показываем текущую
-            current_temp = user_service.get_temperature(user_id)
+            current_temp = await user_service.get_temperature(user_id)
             await message.answer(
                 f"🌡 Текущая температура: {current_temp}\n\n"
                 "Используй команду так:\n"
@@ -168,7 +168,7 @@ def register_command_handlers(dp, user_service, history_formatter):
                     return
                 
                 # Сохраняем максимальное количество токенов
-                user_service.set_max_tokens(user_id, max_tokens_value)
+                await user_service.set_max_tokens(user_id, max_tokens_value)
                 await message.answer(
                     f"✅ Максимальное количество токенов установлено: {max_tokens_value}\n\n"
                     f"Следующие ответы будут ограничены этим количеством токенов."
@@ -181,7 +181,7 @@ def register_command_handlers(dp, user_service, history_formatter):
                 )
         else:
             # Если значения нет, показываем текущее
-            current_max_tokens = user_service.get_max_tokens(user_id)
+            current_max_tokens = await user_service.get_max_tokens(user_id)
             await message.answer(
                 f"🔢 Текущее максимальное количество токенов: {current_max_tokens}\n\n"
                 "Используй команду так:\n"
@@ -198,7 +198,7 @@ def register_command_handlers(dp, user_service, history_formatter):
     async def cmd_clear(message: types.Message):
         """Обработчик команды /clear - очищает историю сообщений пользователя"""
         user_id = message.from_user.id
-        if user_service.clear_history(user_id):
+        if await user_service.clear_history(user_id):
             await message.answer("История сообщений очищена. ✅")
         else:
             await message.answer("История сообщений уже пуста.")
@@ -209,7 +209,7 @@ def register_command_handlers(dp, user_service, history_formatter):
         user_id = message.from_user.id
         
         # Получаем историю
-        history = user_service.get_history(user_id)
+        history = await user_service.get_history(user_id)
         
         # Проверяем наличие истории
         if not history:
