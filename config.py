@@ -29,6 +29,7 @@ class Config:
         # Опциональные переменные с значениями по умолчанию
         self.yandex_model: str = os.getenv("YANDEX_MODEL", "yandexgpt/latest")
         self.db_path: str = os.getenv("DB_PATH", "bot.db")
+        self.mcp_server_url: str = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
     
     def _validate_config(self) -> None:
         """Валидирует обязательные переменные окружения."""

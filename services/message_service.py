@@ -43,10 +43,7 @@ class MessageService:
             - success = True если подготовка успешна
             - error_message - сообщение об ошибке (None если успешно)
         """
-        # Проверяем наличие системного промпта
-        if not await self.user_service.has_system_prompt(user_id):
-            return False, "Системный промпт не установлен. Пожалуйста, используй команду /system для его установки."
-        
+        # Системный промпт опционален, можно работать без него
         # Добавляем сообщение пользователя в историю (токены будут получены из API ответа)
         await self.user_service.add_message(user_id, "user", text)
         
@@ -205,9 +202,7 @@ class MessageService:
         Returns:
             Кортеж (success, message, prompt_tokens, response_tokens)
         """
-        # Проверяем наличие системного промпта
-        if not await self.user_service.has_system_prompt(user_id):
-            return False, "Системный промпт не установлен. Пожалуйста, используй команду /system для его установки.", 0, 0
+        # Системный промпт опционален, можно работать без него
         
         # Добавляем сообщение пользователя в историю (токены будут получены из API ответа)
         await self.user_service.add_message(user_id, "user", text)

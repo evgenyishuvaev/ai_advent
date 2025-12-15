@@ -3,7 +3,7 @@ from handlers.commands import register_command_handlers
 from handlers.messages import register_message_handlers
 
 
-def setup_handlers(dp, user_service, message_service, yandex_gpt_service, history_formatter, bot):
+def setup_handlers(dp, user_service, message_service, yandex_gpt_service, history_formatter, bot, mcp_service=None):
     """
     Регистрирует все хендлеры в диспетчере.
     
@@ -14,8 +14,9 @@ def setup_handlers(dp, user_service, message_service, yandex_gpt_service, histor
         yandex_gpt_service: Экземпляр YandexGPTService
         history_formatter: Экземпляр HistoryFormatterService
         bot: Экземпляр Bot
+        mcp_service: Экземпляр MCPService (опционально)
     """
-    register_command_handlers(dp, user_service, history_formatter)
+    register_command_handlers(dp, user_service, history_formatter, mcp_service)
     register_message_handlers(dp, user_service, message_service, yandex_gpt_service, bot)
 
 

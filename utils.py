@@ -18,3 +18,22 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+
+def escape_html(text: str) -> str:
+    """
+    Экранирует специальные символы HTML для Telegram.
+    
+    Args:
+        text: Текст для экранирования
+        
+    Returns:
+        Экранированный текст
+    """
+    if not text:
+        return ""
+    # Экранируем основные HTML символы
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
+    return text
+

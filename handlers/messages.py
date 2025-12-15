@@ -3,7 +3,7 @@ from aiogram import types
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from handlers.states import SystemPromptStates
-from utils import escape_markdown
+from utils import escape_markdown, escape_html
 
 
 def register_message_handlers(dp, user_service, message_service, yandex_gpt_service, bot):
@@ -15,20 +15,26 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
         user_id = message.from_user.id
         
         if not message.text:
-            await message.answer("Пожалуйста, отправь текстовый системный промпт.")
+            await message.answer(
+                "Пожалуйста, отправь текстовый системный промпт.\n\n"
+                "Для очистки системного промпта используй команду /clear_system."
+            )
             return
         
         # Сохраняем системный промпт
-        await user_service.set_system_prompt(user_id, message.text)
-        # Экранируем промпт для безопасного отображения
-        prompt_preview = message.text[:100] + ('...' if len(message.text) > 100 else '')
-        prompt_preview_escaped = escape_markdown(prompt_preview)
+        system_prompt = message.text.strip()
+        await user_service.set_system_prompt(user_id, system_prompt)
+        
+        # Экранируем промпт для безопасного отображения (используем HTML)
+        prompt_preview = system_prompt[:100] + ('...' if len(system_prompt) > 100 else '')
+        prompt_preview_escaped = escape_html(prompt_preview)
         await message.answer(
             f"Системный промпт установлен! ✅\n\n"
-            f"Текущий промпт: {prompt_preview_escaped}\n\n"
+            f"Текущий промпт: <code>{prompt_preview_escaped}</code>\n\n"
             "Теперь можешь отправлять сообщения боту.",
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
+        
         await state.clear()
 
     @dp.message()
