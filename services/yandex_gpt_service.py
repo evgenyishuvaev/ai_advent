@@ -4,6 +4,7 @@ import asyncio
 import aiohttp
 import json
 from typing import Optional, Tuple, List, Dict, Any
+from mcp.types import CallToolResult
 
 
 class YandexGPTService:
@@ -119,11 +120,8 @@ class YandexGPTService:
             return json.dumps({"error": "MCP сервис не доступен"})
         
         try:
-            result = await self.mcp_service.call_tool(tool_name, arguments)
-            # Преобразуем результат в строку JSON
-            if isinstance(result, str):
-                return result
-            return json.dumps(result, ensure_ascii=False)
+            result: CallToolResult = await self.mcp_service.call_tool(tool_name, arguments)
+            return result.structured_content
         except Exception as e:
             return json.dumps({"error": f"Ошибка при выполнении tool {tool_name}: {str(e)}"})
     
@@ -202,7 +200,6 @@ class YandexGPTService:
                     ) as response:
                         if response.status == 200:
                             data = await response.json()
-                            
                             # Извлекаем информацию о токенах
                             if "result" in data and "usage" in data["result"]:
                                 usage_data = data["result"]["usage"]
@@ -250,7 +247,6 @@ class YandexGPTService:
                                         
                                         # Выполняем tool call
                                         tool_result = await self._execute_tool_call(tool_name, tool_args)
-                                        
                                         # Добавляем результат в список
                                         tool_results.append({
                                             "name": tool_name,
