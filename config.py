@@ -1,8 +1,9 @@
 """Модуль для управления конфигурацией приложения."""
 
 import os
+import json
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List
 
 
 class Config:
@@ -29,7 +30,33 @@ class Config:
         # Опциональные переменные с значениями по умолчанию
         self.yandex_model: str = os.getenv("YANDEX_MODEL", "yandexgpt/latest")
         self.db_path: str = os.getenv("DB_PATH", "bot.db")
-        self.mcp_server_url: str = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
+        
+        # Поддержка списка MCP серверов
+        # Если указан MCP_SERVERS (JSON массив), используем его
+        # Иначе, если указан MCP_SERVER_URL, используем его как единственный сервер
+        # Иначе используем значение по умолчанию
+        mcp_servers_env = os.getenv("MCP_SERVERS")
+        mcp_server_url_env = os.getenv("MCP_SERVER_URL")
+        
+        if mcp_servers_env:
+            # Пытаемся распарсить JSON массив
+            try:
+                self.mcp_server_urls: List[str] = json.loads(mcp_servers_env)
+                if not isinstance(self.mcp_server_urls, list):
+                    raise ValueError("MCP_SERVERS должен быть JSON массивом")
+                if not self.mcp_server_urls:
+                    raise ValueError("MCP_SERVERS не может быть пустым массивом")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Неверный формат MCP_SERVERS (должен быть JSON массив): {e}")
+        elif mcp_server_url_env:
+            # Обратная совместимость: один сервер
+            self.mcp_server_urls: List[str] = [mcp_server_url_env]
+        else:
+            # Значение по умолчанию
+            self.mcp_server_urls: List[str] = ["http://127.0.0.1:8000/mcp"]
+        
+        # Для обратной совместимости сохраняем первый URL
+        self.mcp_server_url: str = self.mcp_server_urls[0]
     
     def _validate_config(self) -> None:
         """Валидирует обязательные переменные окружения."""

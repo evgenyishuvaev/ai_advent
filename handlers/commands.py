@@ -251,7 +251,7 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
 
     @dp.message(Command("mcp_tools"))
     async def cmd_mcp_tools(message: types.Message):
-        """Обработчик команды /mcp_tools - показывает доступные инструменты MCP сервера"""
+        """Обработчик команды /mcp_tools - показывает доступные инструменты MCP сервера(ов)"""
         if mcp_service is None:
             await message.answer(
                 "❌ MCP сервис не инициализирован.\n\n"
@@ -262,8 +262,8 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
         # Проверяем подключение
         if not mcp_service.is_connected():
             await message.answer(
-                "❌ MCP сервис не подключен к серверу.\n\n"
-                "Проверьте, что MCP сервер запущен и доступен по адресу, указанному в конфигурации."
+                "❌ MCP сервис не подключен к серверу(ам).\n\n"
+                "Проверьте, что MCP сервер(ы) запущен(ы) и доступен(ы) по адресу(ам), указанному(ым) в конфигурации."
             )
             return
         
@@ -272,11 +272,19 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
             tools = await mcp_service.list_tools()
             
             if not tools:
-                await message.answer("📋 На MCP сервере нет доступных инструментов.")
+                await message.answer("📋 На MCP сервере(ах) нет доступных инструментов.")
                 return
             
+            # Определяем, сколько серверов подключено (для менеджера)
+            from services.mcp_service_manager import MCPServiceManager
+            if isinstance(mcp_service, MCPServiceManager):
+                connected_servers = mcp_service.get_connected_servers()
+                server_info = f" ({len(connected_servers)} сервер(ов))"
+            else:
+                server_info = ""
+            
             # Форматируем список инструментов
-            tools_text = "🔧 Доступные инструменты MCP сервера:\n\n"
+            tools_text = f"🔧 Доступные инструменты MCP сервера(ов){server_info}:\n\n"
             
             for i, tool in enumerate(tools, 1):
                 # Поддерживаем как словари, так и объекты с атрибутами

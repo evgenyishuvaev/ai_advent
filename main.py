@@ -12,6 +12,7 @@ from services.message_service import MessageService
 from services.history_formatter_service import HistoryFormatterService
 from services.token_service import TokenService
 from services.mcp_service import MCPService
+from services.mcp_service_manager import MCPServiceManager
 from services.daily_task_service import DailyTaskService
 from repositories.database import Database
 from repositories.user_repository import UserRepository
@@ -36,8 +37,13 @@ message_repository = MessageRepository(database)
 bot = Bot(token=config.bot_token)
 dp = Dispatcher()
 
-# Инициализируем MCP сервис
-mcp_service = MCPService(mcp_server_url=config.mcp_server_url)
+# Инициализируем MCP сервис (менеджер для работы с несколькими серверами)
+if len(config.mcp_server_urls) == 1:
+    # Для обратной совместимости: один сервер
+    mcp_service = MCPService(mcp_server_url=config.mcp_server_url)
+else:
+    # Несколько серверов - используем менеджер
+    mcp_service = MCPServiceManager(mcp_server_urls=config.mcp_server_urls)
 
 # Инициализируем сервисы
 yandex_gpt_service = YandexGPTService(
@@ -79,12 +85,16 @@ async def main():
     # Подключаемся к базе данных
     await database.connect()
     
-    # Подключаемся к MCP серверу
+    # Подключаемся к MCP серверу(ам)
     try:
         await mcp_service.connect()
-        logger.info(f"MCP сервис подключен к {config.mcp_server_url}")
+        if isinstance(mcp_service, MCPServiceManager):
+            connected_servers = mcp_service.get_connected_servers()
+            logger.info(f"MCP сервис подключен к {len(connected_servers)}/{len(config.mcp_server_urls)} серверам: {connected_servers}")
+        else:
+            logger.info(f"MCP сервис подключен к {config.mcp_server_url}")
     except Exception as e:
-        logger.warning(f"Не удалось подключиться к MCP серверу: {e}")
+        logger.warning(f"Не удалось подключиться к MCP серверу(ам): {e}")
     
     # Настраиваем scheduler для ежедневных задач
     # Используем локальный timezone
