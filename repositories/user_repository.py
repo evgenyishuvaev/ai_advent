@@ -1,6 +1,6 @@
 """Репозиторий для работы с конфигурацией пользователей."""
 
-from typing import Optional
+from typing import Optional, List
 from repositories.database import Database
 
 
@@ -173,4 +173,16 @@ class UserRepository:
         """
         prompt = await self.get_system_prompt(user_id)
         return prompt is not None and bool(prompt.strip())
+    
+    async def get_all_users(self) -> List[int]:
+        """
+        Получает список всех пользователей из базы данных.
+        
+        Returns:
+            Список user_id всех пользователей
+        """
+        async with self.db.connection.cursor() as cursor:
+            await cursor.execute("SELECT user_id FROM users")
+            rows = await cursor.fetchall()
+            return [row["user_id"] for row in rows]
 

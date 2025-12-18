@@ -112,4 +112,38 @@ class MessageRepository:
                 message.get("tokens"),
                 message.get("response_time")
             )
+    
+    async def get_today_messages(self, user_id: int) -> List[Dict[str, str]]:
+        """
+        Получает сообщения пользователя за сегодня.
+        
+        Args:
+            user_id: ID пользователя
+            
+        Returns:
+            Список сообщений за сегодня в формате [{"role": "user"/"assistant", "text": "...", ...}, ...]
+        """
+        async with self.db.connection.cursor() as cursor:
+            await cursor.execute("""
+                SELECT role, text, tokens, response_time
+                FROM messages
+                WHERE user_id = ? 
+                AND DATE(created_at) = DATE('now')
+                ORDER BY created_at ASC
+            """, (user_id,))
+            rows = await cursor.fetchall()
+            
+            history = []
+            for row in rows:
+                message = {
+                    "role": row["role"],
+                    "text": row["text"]
+                }
+                if row["tokens"] is not None:
+                    message["tokens"] = row["tokens"]
+                if row["response_time"] is not None:
+                    message["response_time"] = row["response_time"]
+                history.append(message)
+            
+            return history
 

@@ -11,4 +11,5 @@ dependencies = [
     "tiktoken>=0.5.0",
     "aiosqlite>=0.19.0",
     "fastmcp>=0.1.0",
+    "apscheduler>=3.10.4",
 ]

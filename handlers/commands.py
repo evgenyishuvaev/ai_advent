@@ -1,11 +1,14 @@
+import logging
 from aiogram import types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from handlers.states import SystemPromptStates
 from utils import escape_markdown, escape_html
 
+logger = logging.getLogger(__name__)
 
-def register_command_handlers(dp, user_service, history_formatter, mcp_service=None):
+
+def register_command_handlers(dp, user_service, history_formatter, mcp_service=None, daily_task_service=None):
     """Регистрирует все командные хендлеры"""
     
     @dp.message(Command("start"))
@@ -38,7 +41,8 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
             "/temperature - Установить коэффициент температуры (0.0-2.0)\n"
             "/set_max_tokens - Установить максимальное количество токенов в ответе (1-8000)\n"
             "/history - Показать историю сообщений\n"
-            "/mcp_tools - Показать доступные инструменты MCP сервера\n\n"
+            "/mcp_tools - Показать доступные инструменты MCP сервера\n"
+            "/daily_analysis - Получить ежедневный анализ задач (не дожидаясь планировщика)\n\n"
             "Просто отправь мне любое сообщение, и я передам его в Yandex GPT, "
             "а затем отправлю тебе ответ модели! Бот помнит контекст предыдущих сообщений."
         )
@@ -310,5 +314,28 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
                 f"❌ Ошибка при получении списка инструментов:\n\n"
                 f"`{escape_markdown(str(e))}`",
                 parse_mode="Markdown"
+            )
+
+    @dp.message(Command("daily_analysis"))
+    async def cmd_daily_analysis(message: types.Message):
+        """Обработчик команды /daily_analysis - получение ежедневного анализа задач"""
+        if daily_task_service is None:
+            await message.answer(
+                "❌ Сервис ежедневного анализа не инициализирован."
+            )
+            return
+        
+        user_id = message.from_user.id
+        
+        # Отправляем сообщение о начале анализа
+        await message.answer("📊 Формирую ежедневный анализ задач... Пожалуйста, подождите.")
+        
+        # Вызываем метод анализа для текущего пользователя
+        try:
+            await daily_task_service.send_daily_analysis(user_id)
+        except Exception as e:
+            logger.error(f"Ошибка при выполнении команды /daily_analysis для пользователя {user_id}: {e}", exc_info=True)
+            await message.answer(
+                "❌ Произошла ошибка при формировании ежедневного анализа задач. Попробуйте позже."
             )
 
