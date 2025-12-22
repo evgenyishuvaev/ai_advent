@@ -185,4 +185,54 @@ class UserRepository:
             await cursor.execute("SELECT user_id FROM users")
             rows = await cursor.fetchall()
             return [row["user_id"] for row in rows]
+    
+    async def get_wiki_mode(self, user_id: int) -> bool:
+        """
+        Получает режим WIKI пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            
+        Returns:
+            True если режим WIKI включен, False иначе
+        """
+        async with self.db.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT wiki_mode FROM users WHERE user_id = ?",
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+            if row and row["wiki_mode"] is not None:
+                return bool(row["wiki_mode"])
+            return False
+    
+    async def set_wiki_mode(self, user_id: int, wiki_mode: bool) -> None:
+        """
+        Устанавливает режим WIKI для пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            wiki_mode: True для включения режима WIKI, False для выключения
+        """
+        async with self.db.connection.cursor() as cursor:
+            # Проверяем, существует ли пользователь
+            await cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+            exists = await cursor.fetchone()
+            
+            wiki_mode_int = 1 if wiki_mode else 0
+            
+            if exists:
+                # Обновляем только wiki_mode
+                await cursor.execute("""
+                    UPDATE users 
+                    SET wiki_mode = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                """, (wiki_mode_int, user_id))
+            else:
+                # Создаем нового пользователя с дефолтными значениями
+                await cursor.execute("""
+                    INSERT INTO users (user_id, wiki_mode, temperature, max_tokens, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, wiki_mode_int, self.DEFAULT_TEMPERATURE, self.DEFAULT_MAX_TOKENS))
+            await self.db.connection.commit()
 

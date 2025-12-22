@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from config import config
@@ -17,6 +18,10 @@ from services.daily_task_service import DailyTaskService
 from repositories.database import Database
 from repositories.user_repository import UserRepository
 from repositories.message_repository import MessageRepository
+from repositories.document_repository import DocumentRepository
+from services.embedding_service import EmbeddingService
+from services.document_service import DocumentService
+from services.rag_service import RAGService
 from handlers import setup_handlers
 
 # Настройка логирования
@@ -32,6 +37,7 @@ database = Database(db_path=config.db_path)
 # Инициализируем репозитории
 user_repository = UserRepository(database)
 message_repository = MessageRepository(database)
+document_repository = DocumentRepository(database)
 
 # Инициализируем бота и диспетчер
 bot = Bot(token=config.bot_token)
@@ -54,7 +60,13 @@ yandex_gpt_service = YandexGPTService(
 )
 user_service = UserService(user_repository, message_repository)
 token_service = TokenService()
-message_service = MessageService(user_service, yandex_gpt_service, token_service)
+
+# Инициализируем сервисы для RAG
+embedding_service = EmbeddingService()
+document_service = DocumentService(document_repository, embedding_service)
+rag_service = RAGService(document_repository, embedding_service)
+
+message_service = MessageService(user_service, yandex_gpt_service, token_service, rag_service)
 history_formatter = HistoryFormatterService()
 daily_task_service = DailyTaskService(
     bot=bot,
@@ -65,7 +77,7 @@ daily_task_service = DailyTaskService(
 )
 
 # Регистрируем все хендлеры
-setup_handlers(dp, user_service, message_service, yandex_gpt_service, history_formatter, bot, mcp_service, daily_task_service)
+setup_handlers(dp, user_service, message_service, yandex_gpt_service, history_formatter, bot, mcp_service, daily_task_service, document_service)
 
 # Инициализируем scheduler для ежедневных задач
 # Используем локальный timezone системы
@@ -84,6 +96,26 @@ async def main():
     """Главная функция для запуска бота"""
     # Подключаемся к базе данных
     await database.connect()
+    
+    # Настраиваем меню команд бота
+    commands = [
+        BotCommand(command="start", description="Начать работу с ботом"),
+        BotCommand(command="help", description="Показать справку по командам"),
+        BotCommand(command="clear", description="Очистить историю сообщений"),
+        BotCommand(command="system", description="Установить системный промпт"),
+        BotCommand(command="clear_system", description="Очистить системный промпт"),
+        BotCommand(command="temperature", description="Настроить температуру (0.0-2.0)"),
+        BotCommand(command="set_max_tokens", description="Настроить максимальное количество токенов"),
+        BotCommand(command="history", description="Показать историю сообщений"),
+        BotCommand(command="upload", description="Загрузить файл для RAG"),
+        BotCommand(command="documents", description="Список загруженных документов"),
+        BotCommand(command="delete_document", description="Удалить документ"),
+        BotCommand(command="wiki", description="Включить/выключить режим WIKI"),
+        BotCommand(command="mcp_tools", description="Показать инструменты MCP сервера"),
+        BotCommand(command="daily_analysis", description="Получить ежедневный анализ"),
+    ]
+    await bot.set_my_commands(commands)
+    logger.info("Меню команд бота настроено")
     
     # Подключаемся к MCP серверу(ам)
     try:

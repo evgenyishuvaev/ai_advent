@@ -1,12 +1,17 @@
 import time
+import os
+import io
+import logging
 from aiogram import types
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from handlers.states import SystemPromptStates
 from utils import escape_markdown, escape_html
 
+logger = logging.getLogger(__name__)
 
-def register_message_handlers(dp, user_service, message_service, yandex_gpt_service, bot):
+
+def register_message_handlers(dp, user_service, message_service, yandex_gpt_service, bot, document_service=None):
     """Регистрирует обработчики обычных сообщений"""
     
     @dp.message(StateFilter(SystemPromptStates.waiting_for_prompt))
@@ -40,6 +45,108 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
     @dp.message()
     async def handle_message(message: types.Message):
         """Обработчик всех сообщений - отправляет в Yandex GPT и возвращает ответ"""
+        # Проверяем, есть ли документ в сообщении (обработка загрузки файлов)
+        if message.document and document_service is not None:
+            user_id = message.from_user.id
+            document = message.document
+            filename = document.file_name or "unknown.txt"
+            
+            # Проверяем размер файла (ограничиваем до 10MB)
+            max_file_size = 10 * 1024 * 1024  # 10MB
+            if document.file_size and document.file_size > max_file_size:
+                await message.answer(
+                    f"❌ Файл слишком большой. Максимальный размер: 10MB.\n"
+                    f"Размер вашего файла: {document.file_size / 1024 / 1024:.2f}MB"
+                )
+                return
+            
+            # Отправляем сообщение о начале обработки
+            processing_msg = await message.answer("📄 Обрабатываю файл... Пожалуйста, подождите.")
+            
+            try:
+                # Скачиваем файл
+                file = await bot.get_file(document.file_id)
+                file_path = file.file_path
+                logger.info(f"Скачивание файла {filename}, размер: {document.file_size} байт")
+                
+                # Скачиваем содержимое файла
+                # В aiogram 3.x download_file может возвращать разные типы
+                file_destination = await bot.download_file(file_path)
+                
+                # Читаем содержимое файла
+                # Если это bytes, используем напрямую
+                if isinstance(file_destination, bytes):
+                    file_bytes = file_destination
+                elif hasattr(file_destination, 'read'):
+                    # Если это файловый объект, читаем его полностью
+                    try:
+                        # Пытаемся прочитать весь файл
+                        file_bytes = file_destination.read()
+                        # Если read() вернул не все, читаем остальное
+                        if hasattr(file_destination, 'seek'):
+                            file_destination.seek(0)
+                            chunks = []
+                            while True:
+                                chunk = file_destination.read(8192)  # Читаем по 8KB
+                                if not chunk:
+                                    break
+                                chunks.append(chunk)
+                            file_bytes = b''.join(chunks)
+                    except Exception as e:
+                        logger.error(f"Ошибка при чтении файла: {e}")
+                        # Пытаемся альтернативный способ
+                        if hasattr(file_destination, 'getvalue'):
+                            file_bytes = file_destination.getvalue()
+                        else:
+                            raise
+                    finally:
+                        # Закрываем файл, если нужно
+                        if hasattr(file_destination, 'close'):
+                            try:
+                                file_destination.close()
+                            except:
+                                pass
+                elif hasattr(file_destination, 'getvalue'):
+                    # Если это BytesIO или подобный объект
+                    file_bytes = file_destination.getvalue()
+                else:
+                    # Пытаемся преобразовать в bytes
+                    file_bytes = bytes(file_destination)
+                
+                # Проверяем размер файла
+                expected_size = document.file_size if document.file_size else None
+                actual_size = len(file_bytes)
+                logger.info(f"Файл {filename} прочитан: {actual_size} байт" + 
+                          (f" (ожидалось: {expected_size} байт)" if expected_size else ""))
+                
+                # Предупреждение, если размер не совпадает
+                if expected_size and abs(actual_size - expected_size) > 10:
+                    logger.warning(f"Размер файла не совпадает: ожидалось {expected_size}, получено {actual_size}")
+                
+                # Обрабатываем файл
+                document_id = await document_service.process_file(
+                    file_content=file_bytes,
+                    filename=filename,
+                    user_id=user_id,
+                    file_path=file_path
+                )
+                
+                await processing_msg.edit_text(
+                    f"✅ Файл '{escape_markdown(filename)}' успешно загружен и обработан!\n\n"
+                    f"Документ добавлен в базу знаний и будет использоваться при ответах на ваши вопросы.",
+                    parse_mode="Markdown"
+                )
+                return
+            except ValueError as e:
+                await processing_msg.edit_text(f"❌ Ошибка: {str(e)}")
+                return
+            except Exception as e:
+                logger.error(f"Ошибка при обработке файла {filename} для пользователя {user_id}: {e}", exc_info=True)
+                await processing_msg.edit_text(
+                    f"❌ Произошла ошибка при обработке файла. Попробуйте позже или проверьте формат файла."
+                )
+                return
+        
         # Проверяем, что сообщение содержит текст
         if not message.text:
             await message.answer("Пожалуйста, отправьте текстовое сообщение.")
@@ -58,7 +165,8 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
             return
         
         # Получаем данные для запроса к LLM
-        history, system_prompt, temperature, max_tokens = await message_service.get_llm_request_data(user_id)
+        # Передаем текущий запрос для режима WIKI
+        history, system_prompt, temperature, max_tokens = await message_service.get_llm_request_data(user_id, current_query=message.text)
         
         # Измеряем время выполнения запроса к LLM
         start_time = time.time()

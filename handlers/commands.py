@@ -1,14 +1,16 @@
 import logging
+import os
 from aiogram import types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.types import ContentType
 from handlers.states import SystemPromptStates
 from utils import escape_markdown, escape_html
 
 logger = logging.getLogger(__name__)
 
 
-def register_command_handlers(dp, user_service, history_formatter, mcp_service=None, daily_task_service=None):
+def register_command_handlers(dp, user_service, history_formatter, mcp_service=None, daily_task_service=None, document_service=None):
     """Регистрирует все командные хендлеры"""
     
     @dp.message(Command("start"))
@@ -42,7 +44,11 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
             "/set_max_tokens - Установить максимальное количество токенов в ответе (1-8000)\n"
             "/history - Показать историю сообщений\n"
             "/mcp_tools - Показать доступные инструменты MCP сервера\n"
-            "/daily_analysis - Получить ежедневный анализ задач (не дожидаясь планировщика)\n\n"
+            "/daily_analysis - Получить ежедневный анализ задач (не дожидаясь планировщика)\n"
+            "/upload - Загрузить файл для использования в RAG\n"
+            "/documents - Показать список загруженных документов\n"
+            "/delete_document - Удалить документ по ID\n"
+            "/wiki - Включить/выключить режим WIKI (работа только с документами, без истории)\n\n"
             "Просто отправь мне любое сообщение, и я передам его в Yandex GPT, "
             "а затем отправлю тебе ответ модели! Бот помнит контекст предыдущих сообщений."
         )
@@ -63,13 +69,39 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
             
             if system_prompt:
                 # Экранируем промпт для безопасного отображения (используем HTML)
-                system_prompt_preview = system_prompt[:100] + ('...' if len(system_prompt) > 100 else '')
-                system_prompt_escaped = escape_html(system_prompt_preview)
-                await message.answer(
-                    f"Системный промпт установлен! ✅\n\n"
-                    f"Текущий промпт: <code>{system_prompt_escaped}</code>",
-                    parse_mode="HTML"
-                )
+                system_prompt_escaped = escape_html(system_prompt)
+                
+                # Лимит Telegram на длину сообщения - 4096 символов
+                # Учитываем длину префикса "Системный промпт установлен! ✅\n\nТекущий промпт: <code></code>"
+                prefix = "Системный промпт установлен! ✅\n\nТекущий промпт: <code>"
+                suffix = "</code>"
+                max_prompt_length = 4096 - len(prefix) - len(suffix)
+                
+                if len(system_prompt_escaped) <= max_prompt_length:
+                    # Промпт помещается в одно сообщение
+                    await message.answer(
+                        f"{prefix}{system_prompt_escaped}{suffix}",
+                        parse_mode="HTML"
+                    )
+                else:
+                    # Промпт слишком длинный, разбиваем на части
+                    await message.answer(
+                        f"Системный промпт установлен! ✅\n\n"
+                        f"Текущий промпт (часть 1/{((len(system_prompt_escaped) + max_prompt_length - 1) // max_prompt_length)}):\n\n"
+                        f"<code>{system_prompt_escaped[:max_prompt_length]}</code>",
+                        parse_mode="HTML"
+                    )
+                    # Отправляем остальные части
+                    part_num = 2
+                    for i in range(max_prompt_length, len(system_prompt_escaped), max_prompt_length):
+                        total_parts = (len(system_prompt_escaped) + max_prompt_length - 1) // max_prompt_length
+                        chunk = system_prompt_escaped[i:i + max_prompt_length]
+                        await message.answer(
+                            f"Текущий промпт (часть {part_num}/{total_parts}):\n\n"
+                            f"<code>{chunk}</code>",
+                            parse_mode="HTML"
+                        )
+                        part_num += 1
             else:
                 await message.answer(
                     "Системный промпт очищен. ✅\n\n"
@@ -82,11 +114,46 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
             if current_prompt:
                 # Экранируем промпт для безопасного отображения (используем HTML)
                 current_prompt_escaped = escape_html(current_prompt)
-                await message.answer(
-                    f"Текущий системный промпт:\n\n<code>{current_prompt_escaped}</code>\n\n"
-                    "Отправь новый системный промпт для его замены, используй /clear_system для очистки, или /cancel для отмены.",
-                    parse_mode="HTML"
-                )
+                
+                # Лимит Telegram на длину сообщения - 4096 символов
+                # Учитываем длину префикса и суффикса
+                prefix = "Текущий системный промпт:\n\n<code>"
+                suffix = "</code>\n\nОтправь новый системный промпт для его замены, используй /clear_system для очистки, или /cancel для отмены."
+                max_prompt_length = 4096 - len(prefix) - len(suffix)
+                
+                if len(current_prompt_escaped) <= max_prompt_length:
+                    # Промпт помещается в одно сообщение
+                    await message.answer(
+                        f"{prefix}{current_prompt_escaped}{suffix}",
+                        parse_mode="HTML"
+                    )
+                else:
+                    # Промпт слишком длинный, разбиваем на части
+                    total_parts = (len(current_prompt_escaped) + max_prompt_length - 1) // max_prompt_length
+                    await message.answer(
+                        f"Текущий системный промпт (часть 1/{total_parts}):\n\n"
+                        f"<code>{current_prompt_escaped[:max_prompt_length]}</code>",
+                        parse_mode="HTML"
+                    )
+                    # Отправляем остальные части
+                    part_num = 2
+                    for i in range(max_prompt_length, len(current_prompt_escaped), max_prompt_length):
+                        chunk = current_prompt_escaped[i:i + max_prompt_length]
+                        if part_num == total_parts:
+                            # Последняя часть с инструкцией
+                            await message.answer(
+                                f"Текущий системный промпт (часть {part_num}/{total_parts}):\n\n"
+                                f"<code>{chunk}</code>\n\n"
+                                "Отправь новый системный промпт для его замены, используй /clear_system для очистки, или /cancel для отмены.",
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await message.answer(
+                                f"Текущий системный промпт (часть {part_num}/{total_parts}):\n\n"
+                                f"<code>{chunk}</code>",
+                                parse_mode="HTML"
+                            )
+                        part_num += 1
             else:
                 await message.answer(
                     "Системный промпт не установлен.\n\n"
@@ -345,5 +412,163 @@ def register_command_handlers(dp, user_service, history_formatter, mcp_service=N
             logger.error(f"Ошибка при выполнении команды /daily_analysis для пользователя {user_id}: {e}", exc_info=True)
             await message.answer(
                 "❌ Произошла ошибка при формировании ежедневного анализа задач. Попробуйте позже."
+            )
+
+    @dp.message(Command("upload"))
+    async def cmd_upload(message: types.Message):
+        """Обработчик команды /upload - загрузка файлов для RAG"""
+        if document_service is None:
+            await message.answer(
+                "❌ Сервис обработки документов не инициализирован."
+            )
+            return
+        
+        await message.answer(
+            "📄 Отправьте текстовый файл для загрузки.\n\n"
+            "Поддерживаемые форматы: .txt, .md, .py, .js, .html, .css, .json, .xml, .csv, .log\n\n"
+            "Файл будет разбит на части и добавлен в базу знаний для использования в ответах бота."
+        )
+
+    @dp.message(Command("documents"))
+    async def cmd_documents(message: types.Message):
+        """Обработчик команды /documents - список загруженных документов"""
+        if document_service is None:
+            await message.answer(
+                "❌ Сервис обработки документов не инициализирован."
+            )
+            return
+        
+        user_id = message.from_user.id
+        
+        try:
+            documents = await document_service.document_repository.get_user_documents(user_id)
+            
+            if not documents:
+                await message.answer(
+                    "📄 У вас пока нет загруженных документов.\n\n"
+                    "Используйте команду /upload для загрузки файлов."
+                )
+                return
+            
+            # Форматируем список документов
+            docs_text = f"📚 Ваши загруженные документы ({len(documents)}):\n\n"
+            for doc in documents:
+                doc_id = doc["id"]
+                filename = escape_markdown(doc["filename"])
+                uploaded_at = doc["uploaded_at"]
+                docs_text += f"• ID: {doc_id} - *{filename}*\n"
+                docs_text += f"  Загружен: {uploaded_at}\n\n"
+            
+            await message.answer(docs_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка документов для пользователя {user_id}: {e}", exc_info=True)
+            await message.answer(
+                "❌ Произошла ошибка при получении списка документов. Попробуйте позже."
+            )
+
+    @dp.message(Command("delete_document"))
+    async def cmd_delete_document(message: types.Message):
+        """Обработчик команды /delete_document - удаление документа"""
+        if document_service is None:
+            await message.answer(
+                "❌ Сервис обработки документов не инициализирован."
+            )
+            return
+        
+        user_id = message.from_user.id
+        
+        # Проверяем, есть ли аргумент с ID документа
+        command_args = message.text.split(maxsplit=1)
+        if len(command_args) < 2:
+            await message.answer(
+                "❌ Укажите ID документа для удаления.\n\n"
+                "Использование: /delete_document <id>\n\n"
+                "Используйте команду /documents для просмотра списка ваших документов."
+            )
+            return
+        
+        try:
+            document_id = int(command_args[1].strip())
+        except ValueError:
+            await message.answer(
+                "❌ Неверный формат ID. ID должен быть числом.\n\n"
+                "Использование: /delete_document <id>"
+            )
+            return
+        
+        try:
+            # Проверяем, существует ли документ и принадлежит ли он пользователю
+            user_documents = await document_service.document_repository.get_user_documents(user_id)
+            document_ids = [doc["id"] for doc in user_documents]
+            
+            if document_id not in document_ids:
+                await message.answer(
+                    f"❌ Документ с ID {document_id} не найден или не принадлежит вам.\n\n"
+                    "Используйте команду /documents для просмотра списка ваших документов."
+                )
+                return
+            
+            # Удаляем документ
+            deleted = await document_service.document_repository.delete_document(document_id)
+            
+            if deleted:
+                await message.answer(
+                    f"✅ Документ с ID {document_id} успешно удален."
+                )
+            else:
+                await message.answer(
+                    f"❌ Не удалось удалить документ с ID {document_id}."
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при удалении документа {document_id} для пользователя {user_id}: {e}", exc_info=True)
+            await message.answer(
+                "❌ Произошла ошибка при удалении документа. Попробуйте позже."
+            )
+
+    @dp.message(Command("wiki"))
+    async def cmd_wiki(message: types.Message):
+        """Обработчик команды /wiki - включение/выключение режима WIKI"""
+        user_id = message.from_user.id
+        
+        # Проверяем, есть ли аргумент в команде
+        command_args = message.text.split(maxsplit=1)
+        if len(command_args) > 1:
+            arg = command_args[1].strip().lower()
+            if arg in ['on', '1', 'true', 'вкл', 'включить']:
+                wiki_mode = True
+            elif arg in ['off', '0', 'false', 'выкл', 'выключить']:
+                wiki_mode = False
+            else:
+                await message.answer(
+                    "❌ Неверный аргумент. Используйте:\n"
+                    "/wiki on - включить режим WIKI\n"
+                    "/wiki off - выключить режим WIKI"
+                )
+                return
+            
+            await user_service.set_wiki_mode(user_id, wiki_mode)
+            status = "включен" if wiki_mode else "выключен"
+            await message.answer(
+                f"✅ Режим WIKI {status}.\n\n"
+                + ("В этом режиме бот работает только с загруженными документами, "
+                   "без использования истории сообщений. Каждый запрос обрабатывается "
+                   "независимо на основе релевантных фрагментов из документов." if wiki_mode else
+                   "Бот вернулся в обычный режим с использованием истории сообщений.")
+            )
+        else:
+            # Если аргумента нет, показываем текущий статус
+            current_wiki_mode = await user_service.get_wiki_mode(user_id)
+            status = "включен" if current_wiki_mode else "выключен"
+            status_icon = "📚" if current_wiki_mode else "💬"
+            await message.answer(
+                f"{status_icon} Режим WIKI: {status}\n\n"
+                "Используйте команду так:\n"
+                "/wiki on - включить режим WIKI\n"
+                "/wiki off - выключить режим WIKI\n\n"
+                "В режиме WIKI:\n"
+                "• История сообщений не используется\n"
+                "• Каждый запрос обрабатывается независимо\n"
+                "• Контекст формируется только из загруженных документов\n"
+                "• Системный промпт сохраняется и используется"
             )
 

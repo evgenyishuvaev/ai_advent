@@ -176,3 +176,25 @@ class UserService:
             new_history: Новая история сообщений в формате [{"role": "user"/"assistant", "text": "..."}, ...]
         """
         await self.message_repo.replace_history(user_id, new_history)
+    
+    async def get_wiki_mode(self, user_id: int) -> bool:
+        """
+        Получает режим WIKI пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            
+        Returns:
+            True если режим WIKI включен, False иначе
+        """
+        return await self.user_repo.get_wiki_mode(user_id)
+    
+    async def set_wiki_mode(self, user_id: int, wiki_mode: bool) -> None:
+        """
+        Устанавливает режим WIKI для пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            wiki_mode: True для включения режима WIKI, False для выключения
+        """
+        await self.user_repo.set_wiki_mode(user_id, wiki_mode)

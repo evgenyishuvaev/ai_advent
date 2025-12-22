@@ -4,6 +4,7 @@ from typing import Optional
 from services.user_service import UserService
 from services.yandex_gpt_service import YandexGPTService
 from services.token_service import TokenService
+from services.rag_service import RAGService
 from utils import escape_markdown
 
 
@@ -16,7 +17,13 @@ SUMMARIZATION_PROMPT = "Сделай краткое техническое ре�
 class MessageService:
     """Сервис для координации обработки сообщений между UserService и YandexGPTService."""
     
-    def __init__(self, user_service: UserService, yandex_gpt_service: YandexGPTService, token_service: TokenService):
+    def __init__(
+        self, 
+        user_service: UserService, 
+        yandex_gpt_service: YandexGPTService, 
+        token_service: TokenService,
+        rag_service: Optional[RAGService] = None
+    ):
         """
         Инициализация сервиса.
         
@@ -24,10 +31,12 @@ class MessageService:
             user_service: Сервис для работы с данными пользователей
             yandex_gpt_service: Сервис для работы с YandexGPT API
             token_service: Сервис для подсчета токенов
+            rag_service: Сервис для поиска релевантных документов (опционально)
         """
         self.user_service = user_service
         self.yandex_gpt_service = yandex_gpt_service
         self.token_service = token_service
+        self.rag_service = rag_service
     
     async def prepare_user_message(self, user_id: int, text: str) -> tuple[bool, Optional[str]]:
         """
@@ -44,8 +53,11 @@ class MessageService:
             - error_message - сообщение об ошибке (None если успешно)
         """
         # Системный промпт опционален, можно работать без него
-        # Добавляем сообщение пользователя в историю (токены будут получены из API ответа)
-        await self.user_service.add_message(user_id, "user", text)
+        # В режиме WIKI не сохраняем сообщения в историю
+        wiki_mode = await self.user_service.get_wiki_mode(user_id)
+        if not wiki_mode:
+            # Добавляем сообщение пользователя в историю (токены будут получены из API ответа)
+            await self.user_service.add_message(user_id, "user", text)
         
         return True, None
     
@@ -98,57 +110,130 @@ class MessageService:
         
         return summary
     
-    async def get_llm_request_data(self, user_id: int) -> tuple[list[dict[str, str]], Optional[str], float, int]:
+    async def get_llm_request_data(self, user_id: int, current_query: Optional[str] = None) -> tuple[list[dict[str, str]], Optional[str], float, int]:
         """
         Получает данные для запроса к LLM: историю, системный промпт, температуру и максимальное количество токенов.
         Автоматически выполняет суммаризацию при достижении лимита токенов.
+        Автоматически ищет релевантные документы через RAGService и добавляет их в контекст.
         
         Args:
             user_id: ID пользователя
+            current_query: Текущий запрос пользователя (используется в режиме WIKI)
             
         Returns:
             Кортеж (history, system_prompt, temperature, max_tokens)
         """
-        history = await self.user_service.get_history(user_id)
+        wiki_mode = await self.user_service.get_wiki_mode(user_id)
         system_prompt = await self.user_service.get_system_prompt(user_id)
         temperature = await self.user_service.get_temperature(user_id)
         max_tokens = await self.user_service.get_max_tokens(user_id)
         
-        # Проверяем количество токенов в контексте
-        context_tokens = self._count_context_tokens(history, system_prompt)
-        
-        # Если достигли лимита, выполняем суммаризацию
-        if context_tokens >= CONTEXT_TOKEN_LIMIT:
-            # Сохраняем последние KEEP_RECENT_MESSAGES сообщений
-            if len(history) > KEEP_RECENT_MESSAGES:
-                recent_messages = history[-KEEP_RECENT_MESSAGES:]
-                history_to_summarize = history[:-KEEP_RECENT_MESSAGES]
-                
-                # Выполняем суммаризацию старой части истории
+        if wiki_mode:
+            # Режим WIKI: не используем историю, только системный промпт и документы
+            history = []
+            
+            # Всегда ищем релевантные документы по текущему запросу
+            if self.rag_service and current_query:
                 try:
-                    summary = await self._summarize_history(history_to_summarize)
-                    # Проверяем, что суммаризация не является сообщением об ошибке
-                    if summary.startswith("Ошибка") or summary.startswith("Превышено"):
-                        # Если суммаризация не удалась, оставляем историю неизменной
-                        pass
-                    else:
-                        # Формируем новую историю: суммаризация + последние сообщения
-                        new_history = [
-                            {
-                                "role": "assistant",
-                                "text": f"[Резюме предыдущего диалога]: {summary}"
-                            }
-                        ]
-                        new_history.extend(recent_messages)
+                    # Ищем релевантные чанки
+                    relevant_chunks = await self.rag_service.search_relevant_chunks(
+                        user_id=user_id,
+                        query=current_query,
+                        top_k=10
+                    )
+                    
+                    if relevant_chunks:
+                        # Форматируем чанки как контекст
+                        context = self.rag_service.format_chunks_as_context(relevant_chunks)
                         
-                        # Заменяем историю в UserService
-                        await self.user_service.replace_history(user_id, new_history)
-                        
-                        # Обновляем history для возврата
-                        history = new_history
+                        # Добавляем контекст как системное сообщение
+                        context_message = {
+                            "role": "system",
+                            "text": context
+                        }
+                        history = [context_message]
                 except Exception:
-                    # В случае ошибки оставляем историю неизменной
+                    # В случае ошибки RAG просто продолжаем без контекста
                     pass
+            
+            # Добавляем текущий запрос пользователя
+            if current_query:
+                history.append({
+                    "role": "user",
+                    "text": current_query
+                })
+        else:
+            # Обычный режим: используем историю
+            history = await self.user_service.get_history(user_id)
+            
+            # Автоматический поиск релевантных документов через RAG
+            if self.rag_service and history:
+                # Берем последнее сообщение пользователя для поиска
+                last_user_message = None
+                for msg in reversed(history):
+                    if msg.get("role") == "user":
+                        last_user_message = msg.get("text", "")
+                        break
+                
+                if last_user_message:
+                    try:
+                        # Ищем релевантные чанки
+                        relevant_chunks = await self.rag_service.search_relevant_chunks(
+                            user_id=user_id,
+                            query=last_user_message,
+                            top_k=10
+                        )
+                        
+                        if relevant_chunks:
+                            # Форматируем чанки как контекст
+                            context = self.rag_service.format_chunks_as_context(relevant_chunks)
+                            
+                            # Добавляем контекст в начало истории или в системный промпт
+                            # Добавляем как системное сообщение в начало истории
+                            context_message = {
+                                "role": "system",
+                                "text": context
+                            }
+                            history = [context_message] + history
+                    except Exception:
+                        # В случае ошибки RAG просто продолжаем без контекста
+                        pass
+            
+            # Проверяем количество токенов в контексте
+            context_tokens = self._count_context_tokens(history, system_prompt)
+            
+            # Если достигли лимита, выполняем суммаризацию
+            if context_tokens >= CONTEXT_TOKEN_LIMIT:
+                # Сохраняем последние KEEP_RECENT_MESSAGES сообщений
+                if len(history) > KEEP_RECENT_MESSAGES:
+                    recent_messages = history[-KEEP_RECENT_MESSAGES:]
+                    history_to_summarize = history[:-KEEP_RECENT_MESSAGES]
+                    
+                    # Выполняем суммаризацию старой части истории
+                    try:
+                        summary = await self._summarize_history(history_to_summarize)
+                        # Проверяем, что суммаризация не является сообщением об ошибке
+                        if summary.startswith("Ошибка") or summary.startswith("Превышено"):
+                            # Если суммаризация не удалась, оставляем историю неизменной
+                            pass
+                        else:
+                            # Формируем новую историю: суммаризация + последние сообщения
+                            new_history = [
+                                {
+                                    "role": "assistant",
+                                    "text": f"[Резюме предыдущего диалога]: {summary}"
+                                }
+                            ]
+                            new_history.extend(recent_messages)
+                            
+                            # Заменяем историю в UserService
+                            await self.user_service.replace_history(user_id, new_history)
+                            
+                            # Обновляем history для возврата
+                            history = new_history
+                    except Exception:
+                        # В случае ошибки оставляем историю неизменной
+                        pass
         
         return history, system_prompt, temperature, max_tokens
     
@@ -179,8 +264,11 @@ class MessageService:
         # Преобразуем в int на случай, если значение пришло как строка
         response_tokens = int(response_tokens) if response_tokens else 0
         
-        # Добавляем ответ ассистента в историю с количеством токенов и временем ответа
-        await self.user_service.add_message(user_id, "assistant", response, tokens=response_tokens, response_time=response_time)
+        # В режиме WIKI не сохраняем ответы в историю
+        wiki_mode = await self.user_service.get_wiki_mode(user_id)
+        if not wiki_mode:
+            # Добавляем ответ ассистента в историю с количеством токенов и временем ответа
+            await self.user_service.add_message(user_id, "assistant", response, tokens=response_tokens, response_time=response_time)
         
         # Экранируем специальные символы Markdown в ответе перед добавлением разметки
         response_escaped = escape_markdown(response)
