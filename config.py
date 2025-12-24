@@ -57,6 +57,11 @@ class Config:
         
         # Для обратной совместимости сохраняем первый URL
         self.mcp_server_url: str = self.mcp_server_urls[0]
+        
+        # Параметры для RAG реранкинга
+        self.rag_retrieve_k: int = int(os.getenv("RAG_RETRIEVE_K", "20"))
+        self.rag_rerank_top_k: int = int(os.getenv("RAG_RERANK_TOP_K", "5"))
+        self.rag_rerank_model: str = os.getenv("RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
     
     def _validate_config(self) -> None:
         """Валидирует обязательные переменные окружения."""

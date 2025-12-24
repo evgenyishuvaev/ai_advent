@@ -22,6 +22,7 @@ from repositories.document_repository import DocumentRepository
 from services.embedding_service import EmbeddingService
 from services.document_service import DocumentService
 from services.rag_service import RAGService
+from services.reranking_service import RerankingService
 from handlers import setup_handlers
 
 # Настройка логирования
@@ -63,8 +64,15 @@ token_service = TokenService()
 
 # Инициализируем сервисы для RAG
 embedding_service = EmbeddingService()
+reranking_service = RerankingService(model_name=config.rag_rerank_model)
 document_service = DocumentService(document_repository, embedding_service)
-rag_service = RAGService(document_repository, embedding_service)
+rag_service = RAGService(
+    document_repository=document_repository,
+    embedding_service=embedding_service,
+    reranking_service=reranking_service,
+    retrieve_k=config.rag_retrieve_k,
+    rerank_top_k=config.rag_rerank_top_k
+)
 
 message_service = MessageService(user_service, yandex_gpt_service, token_service, rag_service)
 history_formatter = HistoryFormatterService()
