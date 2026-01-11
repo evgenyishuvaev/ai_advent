@@ -1,6 +1,6 @@
 """Сервис для обработки сообщений пользователей."""
 
-from typing import Optional
+from typing import Optional, List, Dict
 from services.user_service import UserService
 from services.yandex_gpt_service import YandexGPTService
 from services.token_service import TokenService
@@ -110,7 +110,34 @@ class MessageService:
         
         return summary
     
-    async def get_llm_request_data(self, user_id: int, current_query: Optional[str] = None) -> tuple[list[dict[str, str]], Optional[str], float, int]:
+    def _format_source_info(self, chunks: List[Dict]) -> str:
+        """
+        Форматирует информацию об источниках из списка чанков.
+        
+        Args:
+            chunks: Список словарей с информацией о чанках
+            
+        Returns:
+            Отформатированная строка с информацией об источниках
+        """
+        if not chunks:
+            return ""
+        
+        # Извлекаем уникальные имена файлов
+        filenames = set()
+        for chunk in chunks:
+            filename = chunk.get("filename")
+            if filename:
+                filenames.add(filename)
+        
+        if not filenames:
+            return ""
+        
+        # Форматируем список файлов
+        filename_list = ", ".join(sorted(filenames))
+        return f"📚 Источники: {filename_list}"
+    
+    async def get_llm_request_data(self, user_id: int, current_query: Optional[str] = None) -> tuple[list[dict[str, str]], Optional[str], float, int, Optional[List[Dict]]]:
         """
         Получает данные для запроса к LLM: историю, системный промпт, температуру и максимальное количество токенов.
         Автоматически выполняет суммаризацию при достижении лимита токенов.
@@ -121,12 +148,14 @@ class MessageService:
             current_query: Текущий запрос пользователя (используется в режиме WIKI)
             
         Returns:
-            Кортеж (history, system_prompt, temperature, max_tokens)
+            Кортеж (history, system_prompt, temperature, max_tokens, used_chunks), где:
+            - used_chunks: список использованных чанков или None, если RAG не использовался
         """
         wiki_mode = await self.user_service.get_wiki_mode(user_id)
         system_prompt = await self.user_service.get_system_prompt(user_id)
         temperature = await self.user_service.get_temperature(user_id)
         max_tokens = await self.user_service.get_max_tokens(user_id)
+        used_chunks: Optional[List[Dict]] = None
         
         if wiki_mode:
             # Режим WIKI: не используем историю, только системный промпт и документы
@@ -143,6 +172,9 @@ class MessageService:
                     )
                     
                     if relevant_chunks:
+                        # Сохраняем информацию о использованных чанках
+                        used_chunks = relevant_chunks
+                        
                         # Форматируем чанки как контекст
                         context = self.rag_service.format_chunks_as_context(relevant_chunks)
                         
@@ -185,6 +217,9 @@ class MessageService:
                         )
                         
                         if relevant_chunks:
+                            # Сохраняем информацию о использованных чанках
+                            used_chunks = relevant_chunks
+                            
                             # Форматируем чанки как контекст
                             context = self.rag_service.format_chunks_as_context(relevant_chunks)
                             
@@ -235,14 +270,15 @@ class MessageService:
                         # В случае ошибки оставляем историю неизменной
                         pass
         
-        return history, system_prompt, temperature, max_tokens
+        return history, system_prompt, temperature, max_tokens, used_chunks
     
     async def process_llm_response(
         self, 
         user_id: int, 
         response: str, 
         response_time: float,
-        usage: dict
+        usage: dict,
+        used_chunks: Optional[List[Dict]] = None
     ) -> tuple[bool, str, int]:
         """
         Обрабатывает ответ от LLM: использует информацию о токенах из API, добавляет в историю.
@@ -252,6 +288,7 @@ class MessageService:
             response: Ответ от LLM
             response_time: Время выполнения запроса к LLM в секундах
             usage: Словарь с информацией о токенах из API {"inputTextTokens": int, "completionTokens": int, "totalTokens": int}
+            used_chunks: Список использованных чанков из RAG (опционально)
             
         Returns:
             Кортеж (success, response_with_tokens, response_tokens), где:
@@ -273,8 +310,16 @@ class MessageService:
         # Экранируем специальные символы Markdown в ответе перед добавлением разметки
         response_escaped = escape_markdown(response)
         
-        # Формируем ответ с информацией о токенах и времени под чертой
-        response_with_tokens = f"{response_escaped}\n\n---\nОтвет: {response_tokens} токенов | Время: {response_time:.2f}с"
+        # Формируем информацию об источниках, если они были использованы
+        source_info = ""
+        if used_chunks:
+            source_info_text = self._format_source_info(used_chunks)
+            if source_info_text:
+                source_info_escaped = escape_markdown(source_info_text)
+                source_info = f"{source_info_escaped}\n\n"
+        
+        # Формируем ответ с информацией об источниках (если есть), основным текстом и информацией о токенах и времени под чертой
+        response_with_tokens = f"{source_info}{response_escaped}\n\n---\nОтвет: {response_tokens} токенов | Время: {response_time:.2f}с"
         
         return True, response_with_tokens, response_tokens
     

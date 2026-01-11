@@ -166,7 +166,7 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
         
         # Получаем данные для запроса к LLM
         # Передаем текущий запрос для режима WIKI
-        history, system_prompt, temperature, max_tokens = await message_service.get_llm_request_data(user_id, current_query=message.text)
+        history, system_prompt, temperature, max_tokens, used_chunks = await message_service.get_llm_request_data(user_id, current_query=message.text)
         
         # Измеряем время выполнения запроса к LLM
         start_time = time.time()
@@ -183,7 +183,7 @@ def register_message_handlers(dp, user_service, message_service, yandex_gpt_serv
             await message.answer(f"Промпт состоит из: {input_tokens} токенов")
         
         # Обрабатываем ответ: используем информацию о токенах из API и добавляем в историю
-        success, response_with_tokens, response_tokens = await message_service.process_llm_response(user_id, response, response_time, usage)
+        success, response_with_tokens, response_tokens = await message_service.process_llm_response(user_id, response, response_time, usage, used_chunks=used_chunks)
         
         # Отправляем ответ пользователю с информацией о токенах
         await message.answer(response_with_tokens, parse_mode="Markdown")
